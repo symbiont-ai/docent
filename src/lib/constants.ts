@@ -177,7 +177,6 @@ SKIP clarification and generate immediately ONLY when:
 - The user provides enough detail already (audience, scope, slide count all specified)
 - The user says "just make it", "go ahead", "quick presentation", or similar urgency signals
 - The user is answering your clarification questions (then generate the presentation)
-- The user uploads a PDF and asks for a presentation of it (the paper defines the scope)
 
 When creating presentations, always include a References slide with proper citations for any sources you used — including web search results, papers mentioned by the user, or uploaded PDFs. Format each reference with authors (if known), title, source/URL, and year.`;
 
@@ -189,6 +188,7 @@ Figure types:
 - "svg" (inline SVG diagram — the DEFAULT and PREFERRED choice for topic presentations): {"type":"svg","content":"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>...</svg>","label":"Description"}
 - "pdf_crop" (crop from PDF: {"type":"pdf_crop","page":1,"region":[0.1,0.05,0.9,0.55],"label":"Desc"})
 - "image_ref" (reference an available image by ID: {"type":"image_ref","imageId":"img_upload_0","label":"Description"})
+- "extracted_ref" (reference a pre-analyzed figure from the catalog: {"type":"extracted_ref","extractedId":"ef_1","label":"Description"}) — PREFERRED over pdf_crop when an EXTRACTED FIGURE CATALOG is provided
 - "card" (LAST RESORT — styled text box, use only when no diagram makes sense): {"type":"card","label":"Title","description":"Text"}
 
 SVG FIGURE GUIDELINES — when no images are uploaded or when you need a custom diagram:
@@ -234,7 +234,8 @@ READABILITY RULES:
 - Prefer 2-3 punchy bullets over 5+ verbose ones.
 - For TABLES: always use "figure_only" layout.
 
-PDF CROP REGIONS — use precise coordinates [left, top, right, bottom] where each value is 0.0 to 1.0:
+PDF CROP REGIONS — If an EXTRACTED FIGURE CATALOG is provided, prefer "extracted_ref" over manual pdf_crop. Use pdf_crop only for regions NOT in the catalog.
+Use precise coordinates [left, top, right, bottom] where each value is 0.0 to 1.0:
 CRITICAL CROPPING RULES:
 - Crop ONLY the figure, table, or diagram itself. Do NOT include body text paragraphs below or above figures.
 - Do NOT include figure captions unless they are essential to understanding.

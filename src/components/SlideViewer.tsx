@@ -23,9 +23,12 @@ interface SlideViewerProps {
   onRevertFigure?: () => void;
   onUpdateSpeakerNotes?: (notes: string) => void;
   onRevertSpeakerNotes?: () => void;
+  onShowCropEditor?: () => void;
   imageLoading?: boolean;
   isLoadingAudio?: boolean;
   isStreamingSlides?: boolean;
+  /** Lazy crop function passed to SlideRenderer for on-demand PDF figure cropping */
+  cropFn?: (page: number, region: number[] | string | undefined) => Promise<string | null>;
 }
 
 export default function SlideViewer({
@@ -46,9 +49,11 @@ export default function SlideViewer({
   onRevertFigure,
   onUpdateSpeakerNotes,
   onRevertSpeakerNotes,
+  onShowCropEditor,
   imageLoading,
   isLoadingAudio,
   isStreamingSlides,
+  cropFn,
 }: SlideViewerProps) {
   const { slides, currentSlide, title, isPresenting, autoAdvance, speakerNotesVisible } = presentationState;
   const currentSlideData = slides[currentSlide];
@@ -207,8 +212,10 @@ export default function SlideViewer({
             totalSlides={slides.length}
             onShowPromptEditor={isStreamingSlides ? undefined : onShowPromptEditor}
             onRevertFigure={isStreamingSlides ? undefined : onRevertFigure}
+            onShowCropEditor={isStreamingSlides ? undefined : onShowCropEditor}
             imageLoading={imageLoading}
             isStreamingSlides={isStreamingSlides}
+            cropFn={cropFn}
           />
         )}
       </div>

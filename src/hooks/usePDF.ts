@@ -27,6 +27,7 @@ export function usePDF(options?: UsePDFOptions) {
   const [pdfZoom, setPdfZoom] = useState(1.0);
   const [pdfThumbnails, setPdfThumbnails] = useState<string[]>([]);
   const [pdfTextPages, setPdfTextPages] = useState<string[]>([]);
+  const [figureIndex, setFigureIndex] = useState<Array<{ label: string; page: number; type: string }>>([]);
 
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
   const pdfContainerRef = useRef<HTMLDivElement>(null);
@@ -134,6 +135,21 @@ export function usePDF(options?: UsePDFOptions) {
         }
       }
       setPdfTextPages(textPages);
+
+      // Build figure/table/equation index from extracted text
+      const figIdx: Array<{ label: string; page: number; type: string }> = [];
+      const labelPattern = /\b((?:Supplementary\s+)?(?:Figure|Fig\.|Table|Equation|Eq\.|Scheme|Chart|Plate|Box))\s*\.?\s*(\d+[a-zA-Z]?(?:\.\d+)?)/gi;
+      for (let i = 0; i < textPages.length; i++) {
+        for (const m of textPages[i].matchAll(labelPattern)) {
+          const rawType = m[1].replace(/\.$/, '');
+          const label = `${rawType} ${m[2]}`;
+          if (!figIdx.some(e => e.label.toLowerCase() === label.toLowerCase())) {
+            figIdx.push({ label, page: i + 1, type: rawType.toLowerCase() });
+          }
+        }
+      }
+      setFigureIndex(figIdx);
+      console.log(`[PDF] Figure index: ${figIdx.length} elements found`, figIdx.map(e => `${e.label} → p${e.page}`));
 
       setLoadingMsg?.('');
       return doc;
@@ -243,6 +259,7 @@ export function usePDF(options?: UsePDFOptions) {
     pdfZoom,
     pdfThumbnails,
     pdfTextPages,
+    figureIndex,
 
     // Setters
     setPdfDoc,
@@ -251,6 +268,7 @@ export function usePDF(options?: UsePDFOptions) {
     setPdfZoom,
     setPdfThumbnails,
     setPdfTextPages,
+    setFigureIndex,
 
     // Refs
     pdfCanvasRef,

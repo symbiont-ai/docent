@@ -6,7 +6,7 @@
 // ==========================================================
 
 import { useState, useRef, useCallback, useEffect, type MutableRefObject } from 'react';
-import type { PresentationState, PresentationData, Slide, ImageCatalogEntry } from '@/src/types';
+import type { PresentationState, PresentationData, Slide, ImageCatalogEntry, ExtractedFigure } from '@/src/types';
 import { decodeEntities, resolveImageRefs } from '@/src/lib/presentation';
 import { resolveRegion } from '@/src/lib/pdf-utils';
 
@@ -25,6 +25,7 @@ export interface LoadPresentationOptions {
   pdfDoc?: any;
   pdfTotalPages?: number;
   cropFn?: (pageNum: number, region: number[] | string | undefined, doc?: unknown) => Promise<string | null>;
+  extractedFigures?: ExtractedFigure[];
 }
 
 export function usePresentation(
@@ -68,7 +69,7 @@ export function usePresentation(
     data: PresentationData,
     opts?: LoadPresentationOptions,
   ): Promise<void> => {
-    const { pdfDoc, pdfTotalPages, cropFn } = opts || {};
+    const { pdfDoc, pdfTotalPages, cropFn, extractedFigures } = opts || {};
 
     // 1. Decode HTML entities in all slides
     let slides = data.slides.map(decodeSlide);
@@ -76,47 +77,41 @@ export function usePresentation(
     // 2. Resolve image_ref figures from the catalog
     slides = resolveImageRefs(slides, imageCatalogRef.current);
 
-    // 3. Pre-crop all PDF figures
-    if (cropFn) {
-      const croppedSlides: Slide[] = [];
-      for (const slide of slides) {
-        if (slide.figure?.type === 'pdf_crop' && slide.figure.page) {
-          const region = resolveRegion(slide.figure.region);
-          const dataURL = await cropFn(slide.figure.page, region, pdfDoc);
-          croppedSlides.push({
-            ...slide,
-            figure: {
-              ...slide.figure,
-              croppedDataURL: dataURL || undefined,
-            },
-          });
-        } else {
-          croppedSlides.push(slide);
+    // 2.5. Resolve extracted_ref figures from the extraction catalog → pdf_crop metadata
+    // Crops are resolved lazily by SlideRenderer (no base64 embedded in slide objects)
+    if (extractedFigures && extractedFigures.length > 0) {
+      slides = slides.map(slide => {
+        if (slide.figure?.type !== 'extracted_ref' || !slide.figure.extractedId) return slide;
+        const ef = extractedFigures.find(f => f.id === slide.figure!.extractedId);
+        if (!ef) {
+          // Not found — fallback to card
+          return { ...slide, figure: { type: 'card' as const, label: slide.figure.label || 'Figure', description: slide.figure.description || '' } };
         }
-      }
-      slides = croppedSlides;
+        // Always convert to pdf_crop — SlideRenderer will lazily crop via cropFn
+        return { ...slide, figure: { type: 'pdf_crop' as const, page: ef.page, region: ef.region, label: slide.figure.label || ef.label || ef.description } };
+      });
     }
 
+    // 3. (Removed) Pre-cropping is now handled lazily by SlideRenderer via cropFn prop.
+    // This keeps slide objects lightweight (no embedded base64) for session persistence.
+
     // 4. Auto-inject PDF title page snapshot on the first (title) slide
-    if (pdfDoc && pdfTotalPages && pdfTotalPages > 0 && slides.length > 0 && cropFn) {
+    // Only store metadata — SlideRenderer lazily crops via cropFn
+    if (pdfDoc && pdfTotalPages && pdfTotalPages > 0 && slides.length > 0) {
       const titleSlide = slides[0];
       // Inject if: no figure, text_only layout, or model generated a decorative SVG (PDF crop takes priority)
       if (!titleSlide.figure || titleSlide.layout === 'text_only' ||
           (titleSlide.figure.type === 'svg' && pdfDoc)) {
-        const titlePageDataURL = await cropFn(1, [0, 0, 1, 0.5], pdfDoc);
-        if (titlePageDataURL) {
-          slides[0] = {
-            ...titleSlide,
-            layout: 'figure_focus',
-            figure: {
-              type: 'pdf_crop',
-              page: 1,
-              region: [0, 0, 1, 0.5],
-              croppedDataURL: titlePageDataURL,
-              label: 'Paper title page',
-            },
-          };
-        }
+        slides[0] = {
+          ...titleSlide,
+          layout: 'figure_focus',
+          figure: {
+            type: 'pdf_crop',
+            page: 1,
+            region: [0, 0, 1, 0.5],
+            label: 'Paper title page',
+          },
+        };
       }
     }
 
@@ -153,16 +148,34 @@ export function usePresentation(
 
   /**
    * Add newly arrived slides during streaming (appends to existing slides).
+   * Resolves extracted_ref → pdf_crop and image_ref → image so figures render
+   * immediately during streaming (not just after loadPresentation finalizes).
    */
-  const addStreamingSlides = useCallback((newSlides: Slide[]) => {
+  const addStreamingSlides = useCallback((newSlides: Slide[], extractedFigures?: ExtractedFigure[]) => {
     if (newSlides.length === 0) return;
-    const decoded = newSlides.map(decodeSlide);
+    let decoded = newSlides.map(decodeSlide);
+
+    // Resolve extracted_ref → pdf_crop (same logic as loadPresentation step 2.5)
+    if (extractedFigures && extractedFigures.length > 0) {
+      decoded = decoded.map(slide => {
+        if (slide.figure?.type !== 'extracted_ref' || !slide.figure.extractedId) return slide;
+        const ef = extractedFigures.find(f => f.id === slide.figure!.extractedId);
+        if (!ef) {
+          return { ...slide, figure: { type: 'card' as const, label: slide.figure.label || 'Figure', description: slide.figure.description || '' } };
+        }
+        return { ...slide, figure: { type: 'pdf_crop' as const, page: ef.page, region: ef.region, label: slide.figure.label || ef.label || ef.description } };
+      });
+    }
+
+    // Resolve image_ref → image (same logic as loadPresentation step 2)
+    decoded = resolveImageRefs(decoded, imageCatalogRef.current);
+
     setPresentationState(prev => {
       const updated = { ...prev, slides: [...prev.slides, ...decoded] };
       presentationRef.current = updated;
       return updated;
     });
-  }, [decodeSlide]);
+  }, [decodeSlide, imageCatalogRef]);
 
   /**
    * Finalize streaming — exit read-only mode, unlock all controls.

@@ -33,11 +33,13 @@ function computeTimeout(
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type {
   Message,
+  Slide,
   UploadedFile,
   ActiveTab,
   VoiceGender,
   TTSEngine,
   ImageCatalogEntry,
+  ExtractedFigure,
 } from '@/src/types';
 import { callChat, callChatStream } from '@/src/lib/api';
 import type { TokenUsage } from '@/src/lib/api';
@@ -57,6 +59,12 @@ import {
   exportPresentationPPTX as exportPPTX,
 } from '@/src/lib/export-utils';
 import { detectLanguage } from '@/src/lib/language-detect';
+import {
+  extractFiguresFromPdf,
+  preCropExtractedFigures,
+  buildExtractedFigureCatalog,
+  detectSupplementaryBoundary,
+} from '@/src/lib/figure-extraction';
 import { useTTS } from './useTTS';
 import { useMemory } from './useMemory';
 import { usePDF } from './usePDF';
@@ -240,7 +248,10 @@ export function useChat() {
   // forcePresIntent overrides the keyword check (used after model-based intent detection).
   const buildSystemPrompt = useCallback((userText: string, forcePresIntent?: boolean): string => {
     // Base identity — always present
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     let prompt = `You are Sage, the AI assistant powering Docent — an intelligent presentation and research tool built by Symbiont AI Cognitive Labs. You read papers, analyze topics, and create clear, engaging presentations with beautiful SVG diagrams. You speak with confidence and warmth, making complex topics accessible.
+
+Today's date is ${today}.
 
 You can save important observations, user preferences, and key findings using [NOTE: your observation] tags. These will persist across conversations.`;
 
@@ -316,6 +327,9 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
 
   // ── Build API messages ────────────────────────────────────
   // forcePresIntent overrides the keyword check (used after model-based intent detection).
+  // extractedFiguresRef holds the result of Pass 1 extraction (populated in sendMessage, consumed in buildApiMessages)
+  const extractedFiguresRef = useRef<ExtractedFigure[] | null>(null);
+
   const buildApiMessages = useCallback((userText: string, forcePresIntent?: boolean): Array<{
     role: 'user' | 'assistant';
     content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
@@ -338,42 +352,104 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
       // Detect page range from user message (e.g. "pages 3-5", "page 7")
       const pageRangeMatch = userText.match(/pages?\s*(\d+)\s*(?:[-–to]+\s*(\d+))?/i);
 
+      // Check if Pass 1 extraction produced figures (set by sendMessage before calling buildApiMessages)
+      const extractedFigures = extractedFiguresRef.current;
+
       if (isPres && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
-        // Presentation generation — send all thumbnails (needed for crop coordinates)
-        let startIdx = 0;
-        let endIdx = pdf.pdfThumbnails.length;
-        if (pageRangeMatch) {
-          const from = parseInt(pageRangeMatch[1], 10);
-          const to = pageRangeMatch[2] ? parseInt(pageRangeMatch[2], 10) : from;
-          startIdx = Math.max(0, from - 1);
-          endIdx = Math.min(pdf.pdfThumbnails.length, to);
-        }
-        const thumbnailBlocks: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+        if (extractedFigures && extractedFigures.length > 0) {
+          // ── Pass 2: Catalog-based presentation generation (cheap) ──
+          // Send extracted figure catalog + compressed crop images + PDF text
+          // Instead of all 30 full-page thumbnails (~$1+), we send small crops + text (~$0.10-0.30)
+          const catalog = buildExtractedFigureCatalog(extractedFigures);
+          const catalogBlocks: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
 
-        const sendingAll = startIdx === 0 && endIdx === pdf.pdfThumbnails.length;
-        const pageRangeLabel = sendingAll
-          ? `all ${pdf.pdfTotalPages} pages`
-          : `pages ${startIdx + 1}–${endIdx} of ${pdf.pdfTotalPages}`;
-        thumbnailBlocks.push({
-          type: 'text',
-          text: `Here are high-resolution images of ${pageRangeLabel} of the uploaded PDF. LOOK AT EACH PAGE IMAGE to identify exactly where figures, tables, and diagrams are positioned. When specifying crop regions [left, top, right, bottom], use what you SEE in these images.`,
-        });
+          catalogBlocks.push({
+            type: 'text',
+            text: `${catalog}\n\nPre-cropped images of each extracted visual element:`,
+          });
 
-        for (let i = startIdx; i < endIdx; i++) {
-          if (pdf.pdfThumbnails[i]) {
-            thumbnailBlocks.push({
-              type: 'image_url',
-              image_url: { url: pdf.pdfThumbnails[i] },
-            });
+          for (const fig of extractedFigures) {
+            const imgURL = fig.apiDataURL || fig.croppedDataURL;
+            if (imgURL) {
+              catalogBlocks.push({
+                type: 'text',
+                text: `--- ${fig.id}: ${fig.label || fig.kind} (page ${fig.page}) ---`,
+              });
+              catalogBlocks.push({
+                type: 'image_url',
+                image_url: { url: imgURL },
+              });
+            }
           }
-        }
 
-        apiMessages.push({ role: 'user' as const, content: thumbnailBlocks });
-        apiMessages.push({
-          role: 'assistant' as const,
-          content: 'I have carefully examined each page image. I can see exactly where figures, tables, and diagrams are positioned on each page, and I will use precise [left, top, right, bottom] coordinates based on what I see.',
-        });
-        thumbnailsSentRef.current = true;
+          // Include PDF text (main body only, capped at supplementary boundary)
+          const suppPage = detectSupplementaryBoundary(pdf.pdfTextPages);
+          const mainBodyEnd = suppPage ? suppPage - 1 : pdf.pdfTextPages.length;
+
+          const model = availableModels.find(m => m.id === selectedModel);
+          const contextBudget = (model?.contextLength || 128_000) - 22_000;
+          let textContent = `\nPDF Document Text (main body, ${mainBodyEnd} of ${pdf.pdfTotalPages} pages):\n\n`;
+          for (let i = 0; i < mainBodyEnd; i++) {
+            if (pdf.pdfTextPages[i]) {
+              const pageBlock = `--- PAGE ${i + 1} ---\n${pdf.pdfTextPages[i]}\n\n`;
+              if ((textContent.length + pageBlock.length) / 4 > contextBudget) {
+                textContent += `\n--- TRUNCATED at page ${i + 1} (model context limit) ---\n`;
+                break;
+              }
+              textContent += pageBlock;
+            }
+          }
+          if (suppPage) {
+            textContent += `\n--- Pages ${suppPage}–${pdf.pdfTotalPages} are supplementary material (not included). ---\n`;
+          }
+          catalogBlocks.push({ type: 'text', text: textContent });
+
+          apiMessages.push({ role: 'user' as const, content: catalogBlocks });
+          apiMessages.push({
+            role: 'assistant' as const,
+            content: `I've received the extracted figure catalog with ${extractedFigures.length} pre-identified visual elements, their cropped images, and the full paper text. I'll use "extracted_ref" to reference these figures when building slides.`,
+          });
+          thumbnailsSentRef.current = true;
+
+          const cropCount = extractedFigures.filter(f => f.apiDataURL || f.croppedDataURL).length;
+          console.log(`[API] Pass 2: catalog (${extractedFigures.length} figures, ${cropCount} crops) + text (${mainBodyEnd} pages) — skipping ${pdf.pdfThumbnails.length} full-page thumbnails`);
+        } else {
+          // Fallback: no extraction or no figures found — send all thumbnails (existing behavior)
+          let startIdx = 0;
+          let endIdx = pdf.pdfThumbnails.length;
+          if (pageRangeMatch) {
+            const from = parseInt(pageRangeMatch[1], 10);
+            const to = pageRangeMatch[2] ? parseInt(pageRangeMatch[2], 10) : from;
+            startIdx = Math.max(0, from - 1);
+            endIdx = Math.min(pdf.pdfThumbnails.length, to);
+          }
+          const thumbnailBlocks: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+
+          const sendingAll = startIdx === 0 && endIdx === pdf.pdfThumbnails.length;
+          const pageRangeLabel = sendingAll
+            ? `all ${pdf.pdfTotalPages} pages`
+            : `pages ${startIdx + 1}–${endIdx} of ${pdf.pdfTotalPages}`;
+          thumbnailBlocks.push({
+            type: 'text',
+            text: `Here are high-resolution images of ${pageRangeLabel} of the uploaded PDF. LOOK AT EACH PAGE IMAGE to identify exactly where figures, tables, and diagrams are positioned. When specifying crop regions [left, top, right, bottom], use what you SEE in these images.`,
+          });
+
+          for (let i = startIdx; i < endIdx; i++) {
+            if (pdf.pdfThumbnails[i]) {
+              thumbnailBlocks.push({
+                type: 'image_url',
+                image_url: { url: pdf.pdfThumbnails[i] },
+              });
+            }
+          }
+
+          apiMessages.push({ role: 'user' as const, content: thumbnailBlocks });
+          apiMessages.push({
+            role: 'assistant' as const,
+            content: 'I have carefully examined each page image. I can see exactly where figures, tables, and diagrams are positioned on each page, and I will use precise [left, top, right, bottom] coordinates based on what I see.',
+          });
+          thumbnailsSentRef.current = true;
+        }
       } else if (needsVisual && pageRangeMatch && pdf.pdfThumbnails.length > 0) {
         // Figure Q&A with page reference — send only the targeted page(s), not all 30
         const from = parseInt(pageRangeMatch[1], 10);
@@ -398,35 +474,85 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
           role: 'assistant' as const,
           content: `I can see the requested PDF page(s). I'll examine the figures and visuals on ${pageRangeLabel}.`,
         });
-      } else if (pdf.pdfTextPages && pdf.pdfTextPages.length > 0) {
-        // Text mode — send extracted text (10x more efficient for summarization/Q&A)
-        // Guard: cap text to fit within the selected model's context window.
-        // Reserve tokens for system prompt (~4K), output (~16K), and conversation history (~2K).
-        const model = availableModels.find(m => m.id === selectedModel);
-        const contextBudget = (model?.contextLength || 128_000) - 22_000; // reserve 22K for prompt + output + history
-        let textContent = `PDF Document (${pdf.pdfTotalPages} pages) — Extracted Text:\n\n`;
-        let includedPages = 0;
-        for (let i = 0; i < pdf.pdfTextPages.length; i++) {
-          if (pdf.pdfTextPages[i]) {
-            const pageBlock = `--- PAGE ${i + 1} ---\n${pdf.pdfTextPages[i]}\n\n`;
-            // Approximate token count: ~1 token per 4 chars
-            if ((textContent.length + pageBlock.length) / 4 > contextBudget) {
-              textContent += `\n--- TRUNCATED: pages ${i + 1}–${pdf.pdfTotalPages} omitted (model context limit) ---\n`;
-              console.warn(`[PDF] Truncated at page ${i}/${pdf.pdfTotalPages} to fit ${model?.name || 'model'} context (${Math.round(contextBudget)} token budget)`);
-              break;
+      } else if (needsVisual && pdf.figureIndex.length > 0 && pdf.pdfThumbnails.length > 0) {
+        // Figure Q&A via local index — look up figure/table label and send that page
+        const figureRefMatch = userText.match(
+          /\b(?:Supplementary\s+)?(?:Figure|Fig\.?|Table|Equation|Eq\.?|Scheme|Chart|Plate|Box)\s*\.?\s*(\d+[a-zA-Z]?(?:\.\d+)?)/i
+        );
+        if (figureRefMatch) {
+          const queryNum = figureRefMatch[1];
+          const queryType = figureRefMatch[0].toLowerCase().replace(/[.\s]*\d.*/, '').trim(); // e.g. "figure", "table"
+          const entry = pdf.figureIndex.find(e =>
+            e.label.toLowerCase().includes(queryNum) &&
+            e.type.includes(queryType.replace(/\./, ''))
+          );
+          if (entry && pdf.pdfThumbnails[entry.page - 1]) {
+            const thumbnailBlocks: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+            thumbnailBlocks.push({
+              type: 'text',
+              text: `The user is asking about ${entry.label} (found on page ${entry.page} of ${pdf.pdfTotalPages}). Here is the full page:`,
+            });
+            thumbnailBlocks.push({ type: 'image_url', image_url: { url: pdf.pdfThumbnails[entry.page - 1] } });
+            // Include that page's extracted text for caption/context
+            if (pdf.pdfTextPages[entry.page - 1]) {
+              thumbnailBlocks.push({ type: 'text', text: `Page ${entry.page} text:\n${pdf.pdfTextPages[entry.page - 1]}` });
             }
-            textContent += pageBlock;
-            includedPages++;
+            console.log(`[API] Figure Q&A via index: ${entry.label} → page ${entry.page}`);
+            apiMessages.push({ role: 'user' as const, content: thumbnailBlocks });
+            apiMessages.push({
+              role: 'assistant' as const,
+              content: `I can see ${entry.label} on page ${entry.page}. I'll examine it carefully.`,
+            });
           }
+          // If not found in index, fall through to text mode below
         }
-        apiMessages.push({ role: 'user' as const, content: textContent });
-        const truncNote = includedPages < pdf.pdfTotalPages
-          ? ` I received the first ${includedPages} of ${pdf.pdfTotalPages} pages (remaining pages exceeded the context limit).`
-          : '';
-        apiMessages.push({
-          role: 'assistant' as const,
-          content: `I've read the full text of the ${pdf.pdfTotalPages}-page PDF document.${truncNote} I can summarize, answer questions, or analyze its content. What would you like me to do?`,
-        });
+        // If no figureRefMatch, fall through to text mode below
+      }
+
+      // Text mode fallback — only if no visual context was already added above
+      if (apiMessages.length === 0 && pdf.pdfTextPages && pdf.pdfTextPages.length > 0) {
+        const hasSlides = presentation.presentationRef.current.slides.length > 0;
+
+        if (hasSlides && !isPres) {
+          // Post-presentation Q&A: system prompt already has slide index.
+          // Send only a brief paper summary (first 3 pages, ~2K tokens) instead of full text.
+          const summary = pdf.pdfTextPages.slice(0, 3).join('\n').slice(0, 8000);
+          apiMessages.push({ role: 'user' as const, content: `Paper context (first 3 pages of ${pdf.pdfTotalPages}):\n${summary}` });
+          apiMessages.push({
+            role: 'assistant' as const,
+            content: `I have the presentation context and a brief paper summary. How can I help?`,
+          });
+          console.log(`[API] Post-pres Q&A: sending brief summary (~${Math.round(summary.length / 4)} tokens) instead of full ${pdf.pdfTotalPages}-page text`);
+        } else {
+          // Full text mode — send extracted text (for summarization or pre-presentation Q&A)
+          // Guard: cap text to fit within the selected model's context window.
+          // Reserve tokens for system prompt (~4K), output (~16K), and conversation history (~2K).
+          const model = availableModels.find(m => m.id === selectedModel);
+          const contextBudget = (model?.contextLength || 128_000) - 22_000; // reserve 22K for prompt + output + history
+          let textContent = `PDF Document (${pdf.pdfTotalPages} pages) — Extracted Text:\n\n`;
+          let includedPages = 0;
+          for (let i = 0; i < pdf.pdfTextPages.length; i++) {
+            if (pdf.pdfTextPages[i]) {
+              const pageBlock = `--- PAGE ${i + 1} ---\n${pdf.pdfTextPages[i]}\n\n`;
+              // Approximate token count: ~1 token per 4 chars
+              if ((textContent.length + pageBlock.length) / 4 > contextBudget) {
+                textContent += `\n--- TRUNCATED: pages ${i + 1}–${pdf.pdfTotalPages} omitted (model context limit) ---\n`;
+                console.warn(`[PDF] Truncated at page ${i}/${pdf.pdfTotalPages} to fit ${model?.name || 'model'} context (${Math.round(contextBudget)} token budget)`);
+                break;
+              }
+              textContent += pageBlock;
+              includedPages++;
+            }
+          }
+          apiMessages.push({ role: 'user' as const, content: textContent });
+          const truncNote = includedPages < pdf.pdfTotalPages
+            ? ` I received the first ${includedPages} of ${pdf.pdfTotalPages} pages (remaining pages exceeded the context limit).`
+            : '';
+          apiMessages.push({
+            role: 'assistant' as const,
+            content: `I've read the full text of the ${pdf.pdfTotalPages}-page PDF document.${truncNote} I can summarize, answer questions, or analyze its content. What would you like me to do?`,
+          });
+        }
       }
     }
 
@@ -581,6 +707,47 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     abortRef.current = controller;
 
     try {
+      // ── Pass 1: Figure extraction (runs inline before Pass 2) ──
+      // When generating a presentation from a PDF, first run a cheap vision model
+      // to locate all figures/tables/equations, then crop them. This replaces
+      // sending all 30 full-page thumbnails (~$1+) with small crops (~$0.10-0.30).
+      extractedFiguresRef.current = null; // Reset from any previous run
+      if (presIntent && pdf.pdfDoc && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
+        try {
+          setLoadingMsg('Analyzing figures...');
+          const extractionResult = await extractFiguresFromPdf(
+            pdf.pdfThumbnails,
+            pdf.pdfTextPages,
+            apiKey,
+            controller.signal,
+          );
+
+          if (controller.signal.aborted) throw new Error('Aborted');
+
+          if (extractionResult.figures.length > 0) {
+            setLoadingMsg(`Cropping ${extractionResult.figures.length} figures...`);
+            const cropped = await preCropExtractedFigures(
+              extractionResult.figures,
+              pdf.pdfDoc,
+              pdf.figureCacheRef.current,
+            );
+            extractedFiguresRef.current = cropped;
+            console.log(`[Extraction] Pass 1 complete: ${cropped.length} figures cropped`,
+              extractionResult.supplementaryStartPage ? `| Supplementary starts at page ${extractionResult.supplementaryStartPage}` : '');
+            console.log('[Extraction] Catalog:', cropped.map(f =>
+              `${f.id}: ${f.kind} "${f.label || '?'}" p${f.page} [${f.region.map(n => n.toFixed(2)).join(',')}]`
+            ).join(' | '));
+          } else {
+            console.log('[Extraction] Pass 1 found no figures — will use thumbnail fallback');
+          }
+        } catch (extractErr) {
+          if (controller.signal.aborted) throw extractErr;
+          console.warn('[Extraction] Pass 1 failed (will use thumbnail fallback):', extractErr);
+          // Continue with fallback (thumbnails) — extractedFiguresRef stays null
+        }
+        setLoadingMsg('Sage is creating your presentation...');
+      }
+
       // Build initial system prompt and messages.
       // If keywords didn't detect presentation intent, the system prompt includes
       // INTENT_META_INSTRUCTION so the model can signal [PRESENTATION_INTENT].
@@ -687,7 +854,7 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
                   presentation.startStreamingSlides(updatedState.title, updatedState.language);
                   setActiveTab('slides');
                 }
-                presentation.addStreamingSlides(newSlides);
+                presentation.addStreamingSlides(newSlides, extractedFiguresRef.current || undefined);
               }
 
               // Update loading message
@@ -758,6 +925,26 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
               setMessages(prev => prev.map(m =>
                 m.isThinking ? { ...m, text: '' } : m
               ));
+
+              // Run Pass 1 extraction if we have a PDF (same logic as initial path)
+              if (pdf.pdfDoc && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
+                try {
+                  setLoadingMsg('Analyzing figures...');
+                  const extractionResult = await extractFiguresFromPdf(
+                    pdf.pdfThumbnails, pdf.pdfTextPages, apiKey, controller.signal,
+                  );
+                  if (!controller.signal.aborted && extractionResult.figures.length > 0) {
+                    setLoadingMsg(`Cropping ${extractionResult.figures.length} figures...`);
+                    extractedFiguresRef.current = await preCropExtractedFigures(
+                      extractionResult.figures, pdf.pdfDoc, pdf.figureCacheRef.current,
+                    );
+                    console.log(`[Extraction] Pass 1 (retry): ${extractedFiguresRef.current.length} figures cropped`);
+                  }
+                } catch {
+                  console.warn('[Extraction] Pass 1 (retry) failed — using thumbnails');
+                }
+              }
+
               setLoadingMsg('Sage is creating your presentation...');
 
               // Rebuild with full presentation system prompt
@@ -826,7 +1013,7 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
                       presentation.startStreamingSlides(updatedState.title, updatedState.language);
                       setActiveTab('slides');
                     }
-                    presentation.addStreamingSlides(newSlides);
+                    presentation.addStreamingSlides(newSlides, extractedFiguresRef.current || undefined);
                   }
 
                   if (updatedState.extractedCount > 0) {
@@ -914,6 +1101,7 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
           pdfDoc: pdf.pdfDoc,
           pdfTotalPages: pdf.pdfTotalPages,
           cropFn: pdf.cropPdfFigure,
+          extractedFigures: extractedFiguresRef.current || undefined,
         });
 
         // Restore slide position if user navigated during streaming
@@ -1089,11 +1277,38 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     presentation.setPresentationState(prev => ({ ...prev, isPresenting: false }));
   }, [tts, presentation]);
 
+  // ── Resolve lazy crops before export ─────────────────
+  // Iterates through slides and populates croppedDataURL for any
+  // pdf_crop figures that only have metadata (page + region).
+  const resolveLazyCrops = useCallback(async (
+    slides: Slide[],
+    onProgress?: (msg: string) => void,
+  ): Promise<Slide[]> => {
+    const resolved: Slide[] = [];
+    for (let i = 0; i < slides.length; i++) {
+      const slide = slides[i];
+      const fig = slide.figure;
+      if (fig?.type === 'pdf_crop' && !fig.croppedDataURL && fig.page && fig.region) {
+        onProgress?.(`Resolving figure crop for slide ${i + 1}/${slides.length}...`);
+        const dataURL = await pdf.cropPdfFigure(fig.page, fig.region);
+        if (dataURL) {
+          resolved.push({ ...slide, figure: { ...fig, croppedDataURL: dataURL } });
+          continue;
+        }
+      }
+      resolved.push(slide);
+    }
+    return resolved;
+  }, [pdf.cropPdfFigure]);
+
   // ── Export presentation as PPTX ────────────────────────
   const doExportPPTX = useCallback(async () => {
     setIsLoading(true);
     try {
-      await exportPPTX(presentation.presentationRef.current, (msg) => {
+      const ps = presentation.presentationRef.current;
+      setLoadingMsg('Resolving figure crops...');
+      const resolvedSlides = await resolveLazyCrops(ps.slides, setLoadingMsg);
+      await exportPPTX({ ...ps, slides: resolvedSlides }, (msg) => {
         setLoadingMsg(msg);
       });
     } catch (e) {
@@ -1102,15 +1317,23 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
       setIsLoading(false);
       setLoadingMsg('');
     }
-  }, [presentation]);
+  }, [presentation, resolveLazyCrops]);
 
   // ── Export presentation as HTML ────────────────────────
-  const doExportHTML = useCallback(() => {
+  const doExportHTML = useCallback(async () => {
     const ps = presentation.presentationRef.current;
     if (ps.slides.length === 0) return;
-    const html = generateExportHTML(ps.slides, ps.title, ps.speakerNotesVisible);
-    setExportHtml(html);
-  }, [presentation]);
+    setIsLoading(true);
+    try {
+      setLoadingMsg('Resolving figure crops...');
+      const resolvedSlides = await resolveLazyCrops(ps.slides, setLoadingMsg);
+      const html = generateExportHTML(resolvedSlides, ps.title, ps.speakerNotesVisible);
+      setExportHtml(html);
+    } finally {
+      setIsLoading(false);
+      setLoadingMsg('');
+    }
+  }, [presentation, resolveLazyCrops]);
 
   // ── Handle file upload ────────────────────────────────────
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1312,6 +1535,8 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     pdfContainerRef: pdf.pdfContainerRef,
     removePdf: pdf.removePdf,
     renderPdfPage: pdf.renderCurrentPage,
+    cropPdfFigure: pdf.cropPdfFigure,
+    pdfThumbnails: pdf.pdfThumbnails,
 
     // ── Presentation (flattened from usePresentation) ──
     presentationState: presentation.presentationState,

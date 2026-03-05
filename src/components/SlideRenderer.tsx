@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { COLORS } from '@/src/lib/colors';
 import { decodeEntities } from '@/src/lib/presentation';
 import type { Slide, Figure } from '@/src/types';
@@ -24,6 +24,10 @@ interface SlideRendererProps {
   onRevertFigure?: () => void;
   imageLoading?: boolean;
   isStreamingSlides?: boolean;
+  /** Lazy crop function — resolves pdf_crop figures on demand instead of embedding base64 in slides */
+  cropFn?: (page: number, region: number[] | string | undefined) => Promise<string | null>;
+  /** Open the crop correction editor for pdf_crop figures */
+  onShowCropEditor?: () => void;
 }
 
 // Corner bracket style helper
@@ -40,11 +44,37 @@ const cornerStyle = (pos: 'tl' | 'tr' | 'bl' | 'br'): React.CSSProperties => ({
   pointerEvents: 'none',
 });
 
-function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, onRevertFigure, imageLoading, isStreamingSlides }: SlideRendererProps) {
+function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, onRevertFigure, imageLoading, isStreamingSlides, cropFn, onShowCropEditor }: SlideRendererProps) {
   if (!slide) return null;
 
   const hasContent = (slide.content?.length ?? 0) > 0;
   const hasFigure = !!slide.figure;
+
+  // ── Lazy crop: resolve pdf_crop figures on demand ──
+  const [lazyCrop, setLazyCrop] = useState<string | null>(null);
+  const fig = slide.figure;
+  const needsLazyCrop = fig?.type === 'pdf_crop' && !fig.croppedDataURL && !!fig.page && !!fig.region && !!cropFn;
+
+  useEffect(() => {
+    if (!needsLazyCrop || !fig?.page || !fig?.region || !cropFn) return;
+    let cancelled = false;
+    cropFn(fig.page, fig.region).then(result => {
+      if (!cancelled && result) {
+        setLazyCrop(result);
+        // Debug: log crop info + render as clickable image object in console
+        const regionStr = Array.isArray(fig.region) ? (fig.region as number[]).map((n: number) => n.toFixed(2)).join(',') : fig.region;
+        console.log(
+          `%c[Crop] Slide ${slideNumber} — p${fig.page} [${regionStr}] — ${Math.round(result.length / 1024)}KB`,
+          'color: #5BB8D4; font-weight: bold',
+        );
+        // Use Image object — expandable in DevTools (Chrome blocks data: in CSS backgrounds)
+        const img = new Image();
+        img.onload = () => console.log(`  Slide ${slideNumber} crop (${img.width}×${img.height}):`, img);
+        img.src = result;
+      }
+    });
+    return () => { cancelled = true; };
+  }, [needsLazyCrop, fig?.page, JSON.stringify(fig?.region), cropFn]);
 
   // Determine layout
   let layout = slide.layout
@@ -111,6 +141,22 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
             }}
           >
             {'\u21A9'} Revert
+          </button>
+        )}
+        {/* Crop editor — adjust bounding box for pdf_crop figures */}
+        {slide.figure?.type === 'pdf_crop' && onShowCropEditor && (
+          <button
+            onClick={onShowCropEditor}
+            title="Adjust crop region"
+            style={{
+              padding: '3px 8px', fontSize: '11px', borderRadius: '4px',
+              cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
+              backgroundColor: `${COLORS.surface}E0`, border: `1px solid ${COLORS.accent}60`,
+              color: COLORS.accent, whiteSpace: 'nowrap',
+              backdropFilter: 'blur(4px)',
+            }}
+          >
+            {'\u2702\uFE0F'} Crop
           </button>
         )}
         {/* Prompt editor — view/edit prompt, then generate or search */}
@@ -225,14 +271,14 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
                 })}
               </div>
             )}
-            {slide.figure?.croppedDataURL && (
+            {(slide.figure?.croppedDataURL || lazyCrop) && (
               <div style={{
                 flex: '1 1 60%', display: 'flex', alignItems: 'center',
                 justifyContent: 'center', minHeight: 0, overflow: 'hidden',
               }}>
                 <img
-                  src={slide.figure.croppedDataURL}
-                  alt={slide.figure.label || ''}
+                  src={slide.figure?.croppedDataURL || lazyCrop || ''}
+                  alt={slide.figure?.label || ''}
                   style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '8px' }}
                 />
               </div>
@@ -412,16 +458,17 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
     }
 
     if (fig.type === 'pdf_crop') {
-      if (fig.croppedDataURL) {
+      const cropSrc = fig.croppedDataURL || lazyCrop;
+      if (cropSrc) {
         return wrapWithOverlay(
           <img
-            src={fig.croppedDataURL}
+            src={cropSrc}
             alt={fig.label || ''}
             style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '8px' }}
           />
         );
       }
-      // Crop failed -- show placeholder
+      // Crop pending or failed -- show placeholder
       return wrapWithOverlay(
         <div style={{
           padding: '20px', borderRadius: '12px',

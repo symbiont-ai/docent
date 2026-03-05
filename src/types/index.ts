@@ -24,7 +24,7 @@ export interface Message {
   language?: string;  // ISO 639-1 code, detected from response content
 }
 
-export type FigureType = 'svg' | 'pdf_crop' | 'image_ref' | 'image' | 'card';
+export type FigureType = 'svg' | 'pdf_crop' | 'image_ref' | 'image' | 'card' | 'extracted_ref';
 
 export interface Figure {
   type: FigureType;
@@ -36,8 +36,30 @@ export interface Figure {
   croppedDataURL?: string; // pdf_crop rendered result
   src?: string;            // image src (data URL)
   imageId?: string;        // image_ref ID
+  extractedId?: string;    // extracted_ref ID (references ExtractedFigure.id)
   caption?: string;        // Attribution/credit shown below the image
   imagePrompt?: string;    // The prompt used to generate/find this image
+}
+
+/** A figure/table/equation located by the extraction pass (Pass 1). */
+export interface ExtractedFigure {
+  id: string;                                    // "ef_1", "ef_2", ...
+  kind: 'figure' | 'table' | 'equation' | 'diagram' | 'chart' | 'photo' | 'algorithm';
+  page: number;                                  // 1-indexed
+  region: [number, number, number, number];      // [left, top, right, bottom] normalized 0-1
+  label?: string;                                // "Figure 3", "Table 1"
+  description: string;                           // AI-generated brief description
+  croppedDataURL?: string;                       // Populated after pre-cropping (high-res for display)
+  apiDataURL?: string;                            // Compressed JPEG for API use (max 800px, 70% quality)
+}
+
+/** Result of the extraction pass (Pass 1). */
+export interface ExtractionResult {
+  figures: ExtractedFigure[];
+  model: string;
+  extractedAt: number;
+  mainBodyPages: number;              // Pages analyzed (before supplementary cutoff)
+  supplementaryStartPage?: number;    // First page of supplementary material (if detected)
 }
 
 export type SlideLayout = 'figure_only' | 'figure_focus' | 'balanced' | 'text_only';

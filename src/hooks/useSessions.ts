@@ -15,9 +15,28 @@ import type {
   UploadedFile,
   PresentationState,
   Slide,
+  Figure,
 } from '@/src/types';
 
 const SESSION_PREFIX = 'docent:session:';
+
+/**
+ * Strip large base64 data URLs from a figure before saving to IndexedDB.
+ * Preserves page/region so figures can be re-cropped on session load.
+ */
+function stripFigureForStorage(fig: Figure): Figure {
+  const cleaned = { ...fig };
+  delete cleaned.croppedDataURL;
+  // Strip base64 src but keep external URLs (http/https)
+  if (cleaned.src?.startsWith('data:')) {
+    delete cleaned.src;
+    // Convert back to pdf_crop so it re-crops on load
+    if (cleaned.page && cleaned.region) {
+      cleaned.type = 'pdf_crop';
+    }
+  }
+  return cleaned;
+}
 const FILE_CHUNK_PREFIX = 'docent:filechunk:';
 const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB per chunk for IndexedDB
 
@@ -179,7 +198,11 @@ export function useSessions() {
         filesMeta,
         presentation: presentationState?.slides?.length
           ? {
-              slides: presentationState.slides,
+              slides: presentationState.slides.map(slide => ({
+                ...slide,
+                figure: slide.figure ? stripFigureForStorage(slide.figure) : undefined,
+                originalFigure: slide.originalFigure ? stripFigureForStorage(slide.originalFigure) : undefined,
+              })),
               title: presentationState.title,
               language: presentationState.language || 'en',
               currentSlide: presentationState.currentSlide,
@@ -261,7 +284,8 @@ export function useSessions() {
       }
       callbacks.setUploadedFiles(files);
 
-      // Restore presentation (isPresenting=false until user clicks Narrate, matching loadPresentation behavior)
+      // Restore presentation — slides are lightweight (no embedded base64).
+      // SlideRenderer lazily crops pdf_crop figures via cropFn prop.
       if (session.presentation && callbacks.setPresentationState) {
         callbacks.setPresentationState({
           slides: session.presentation.slides as Slide[],

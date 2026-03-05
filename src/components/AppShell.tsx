@@ -13,6 +13,7 @@ import SlideViewer from './SlideViewer';
 import PDFViewer from './PDFViewer';
 import ExportOverlay from './ExportOverlay';
 import SettingsModal from './SettingsModal';
+import CropEditor from './CropEditor';
 import type { PresentationState, Figure } from '@/src/types';
 
 export default function AppShell() {
@@ -32,7 +33,7 @@ export default function AppShell() {
     isSpeaking, isLoadingAudio, speak, stopSpeaking, uploadedFiles, removeFile,
     fileInputRef, handleFileUpload, pdfDoc, pdfPage, setPdfPage,
     pdfTotalPages, pdfZoom, setPdfZoom, pdfCanvasRef, pdfContainerRef,
-    removePdf, renderPdfPage, presentationState, setPresentationState, persistSession,
+    removePdf, renderPdfPage, cropPdfFigure, pdfThumbnails, presentationState, setPresentationState, persistSession,
     isStreamingSlides,
     narrateSlide, stopNarration, exportPresentationPPTX, exportPresentationHTML,
     exportHtml, setExportHtml, cancelGeneration, messagesEndRef,
@@ -46,6 +47,9 @@ export default function AppShell() {
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [promptEditorMode, setPromptEditorMode] = useState<'generate' | 'search'>('generate');
   const [promptEditorText, setPromptEditorText] = useState('');
+
+  // --- Crop editor state ---
+  const [cropEditorOpen, setCropEditorOpen] = useState(false);
 
   // --- Model's max completion tokens for settings slider ---
   const modelMaxTokens = availableModels.find(m => m.id === selectedModel)?.maxCompletionTokens || 32000;
@@ -414,6 +418,27 @@ Return your answer as JSON ONLY, no other text:
     setTimeout(() => persistSession(), 150);
   }, [presentationState.currentSlide, setPresentationState, persistSession]);
 
+  // --- Crop editor: open ---
+  const handleShowCropEditor = useCallback(() => {
+    if (isStreamingSlides) return;
+    setCropEditorOpen(true);
+  }, [isStreamingSlides]);
+
+  // --- Crop editor: apply new region ---
+  const handleApplyCrop = useCallback((newRegion: number[]) => {
+    const slideIdx = presentationStateRef.current.currentSlide;
+    setPresentationState((prev: PresentationState) => ({
+      ...prev,
+      slides: prev.slides.map((s, i) =>
+        i === slideIdx && s.figure?.type === 'pdf_crop'
+          ? { ...s, figure: { ...s.figure, region: newRegion, croppedDataURL: undefined } }
+          : s
+      ),
+    }));
+    setCropEditorOpen(false);
+    setTimeout(() => persistSession(), 150);
+  }, [setPresentationState, persistSession]);
+
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100vh',
@@ -618,11 +643,13 @@ Return your answer as JSON ONLY, no other text:
               onAskAboutSlides={handleAskAboutSlides}
               onShowPromptEditor={handleShowPromptEditor}
               onRevertFigure={handleRevertFigure}
+              onShowCropEditor={handleShowCropEditor}
               onUpdateSpeakerNotes={handleUpdateSpeakerNotes}
               onRevertSpeakerNotes={handleRevertSpeakerNotes}
               imageLoading={imageLoading}
               isLoadingAudio={isLoadingAudio}
               isStreamingSlides={isStreamingSlides}
+              cropFn={cropPdfFigure}
             />
           )}
 
@@ -757,6 +784,21 @@ Return your answer as JSON ONLY, no other text:
           </div>
         </div>
       )}
+
+      {/* ===== CROP EDITOR MODAL ===== */}
+      {cropEditorOpen && (() => {
+        const cs = presentationState.slides[presentationState.currentSlide];
+        const thumb = cs?.figure?.page ? pdfThumbnails[cs.figure.page - 1] : undefined;
+        return cs?.figure?.type === 'pdf_crop' && thumb ? (
+          <CropEditor
+            figure={cs.figure}
+            pageThumb={thumb}
+            cropFn={cropPdfFigure}
+            onApply={handleApplyCrop}
+            onCancel={() => setCropEditorOpen(false)}
+          />
+        ) : null;
+      })()}
 
       {/* ===== SETTINGS MODAL ===== */}
       <SettingsModal
