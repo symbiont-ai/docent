@@ -103,6 +103,7 @@ export function useChat() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageCatalogRef = useRef<ImageCatalogEntry[]>([]);
+  const thumbnailsSentRef = useRef(false);
 
   // ── Composed hooks ────────────────────────────────────────
   const tts = useTTS(voiceGender, ttsEngine, googleApiKey);
@@ -334,16 +335,17 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     );
     if (hasPdf) {
 
-      if (needsVisual && pdf.pdfThumbnails.length > 0) {
-        // Visual mode — send page images (for crop coordinates, figure analysis)
-        // Detect page range from user message (e.g. "pages 3-5", "page 7", "focus on pages 1 to 4")
-        const pageRangeMatch = userText.match(/pages?\s*(\d+)\s*(?:[-–to]+\s*(\d+))?/i);
+      // Detect page range from user message (e.g. "pages 3-5", "page 7")
+      const pageRangeMatch = userText.match(/pages?\s*(\d+)\s*(?:[-–to]+\s*(\d+))?/i);
+
+      if (isPres && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
+        // Presentation generation — send all thumbnails (needed for crop coordinates)
         let startIdx = 0;
         let endIdx = pdf.pdfThumbnails.length;
         if (pageRangeMatch) {
           const from = parseInt(pageRangeMatch[1], 10);
           const to = pageRangeMatch[2] ? parseInt(pageRangeMatch[2], 10) : from;
-          startIdx = Math.max(0, from - 1); // convert 1-based to 0-based
+          startIdx = Math.max(0, from - 1);
           endIdx = Math.min(pdf.pdfThumbnails.length, to);
         }
         const thumbnailBlocks: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
@@ -354,9 +356,7 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
           : `pages ${startIdx + 1}–${endIdx} of ${pdf.pdfTotalPages}`;
         thumbnailBlocks.push({
           type: 'text',
-          text: isPres
-            ? `Here are high-resolution images of ${pageRangeLabel} of the uploaded PDF. LOOK AT EACH PAGE IMAGE to identify exactly where figures, tables, and diagrams are positioned. When specifying crop regions [left, top, right, bottom], use what you SEE in these images.`
-            : `The user has uploaded a PDF document (${pdf.pdfTotalPages} pages). Here are images of ${pageRangeLabel}:`,
+          text: `Here are high-resolution images of ${pageRangeLabel} of the uploaded PDF. LOOK AT EACH PAGE IMAGE to identify exactly where figures, tables, and diagrams are positioned. When specifying crop regions [left, top, right, bottom], use what you SEE in these images.`,
         });
 
         for (let i = startIdx; i < endIdx; i++) {
@@ -371,22 +371,61 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
         apiMessages.push({ role: 'user' as const, content: thumbnailBlocks });
         apiMessages.push({
           role: 'assistant' as const,
-          content: isPres
-            ? 'I have carefully examined each page image. I can see exactly where figures, tables, and diagrams are positioned on each page, and I will use precise [left, top, right, bottom] coordinates based on what I see.'
-            : `I have examined the uploaded PDF pages. I can see and read the content of each page.`,
+          content: 'I have carefully examined each page image. I can see exactly where figures, tables, and diagrams are positioned on each page, and I will use precise [left, top, right, bottom] coordinates based on what I see.',
+        });
+        thumbnailsSentRef.current = true;
+      } else if (needsVisual && pageRangeMatch && pdf.pdfThumbnails.length > 0) {
+        // Figure Q&A with page reference — send only the targeted page(s), not all 30
+        const from = parseInt(pageRangeMatch[1], 10);
+        const to = pageRangeMatch[2] ? parseInt(pageRangeMatch[2], 10) : from;
+        const startIdx = Math.max(0, from - 1);
+        const endIdx = Math.min(pdf.pdfThumbnails.length, to);
+        const pageRangeLabel = `pages ${startIdx + 1}–${endIdx} of ${pdf.pdfTotalPages}`;
+
+        const thumbnailBlocks: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+        thumbnailBlocks.push({
+          type: 'text',
+          text: `The user is asking about a figure/visual. Here are images of ${pageRangeLabel}:`,
+        });
+        for (let i = startIdx; i < endIdx; i++) {
+          if (pdf.pdfThumbnails[i]) {
+            thumbnailBlocks.push({ type: 'image_url', image_url: { url: pdf.pdfThumbnails[i] } });
+          }
+        }
+        console.log(`[API] Figure Q&A: sending ${endIdx - startIdx} page thumbnail(s) (pages ${startIdx + 1}–${endIdx})`);
+        apiMessages.push({ role: 'user' as const, content: thumbnailBlocks });
+        apiMessages.push({
+          role: 'assistant' as const,
+          content: `I can see the requested PDF page(s). I'll examine the figures and visuals on ${pageRangeLabel}.`,
         });
       } else if (pdf.pdfTextPages && pdf.pdfTextPages.length > 0) {
         // Text mode — send extracted text (10x more efficient for summarization/Q&A)
+        // Guard: cap text to fit within the selected model's context window.
+        // Reserve tokens for system prompt (~4K), output (~16K), and conversation history (~2K).
+        const model = availableModels.find(m => m.id === selectedModel);
+        const contextBudget = (model?.contextLength || 128_000) - 22_000; // reserve 22K for prompt + output + history
         let textContent = `PDF Document (${pdf.pdfTotalPages} pages) — Extracted Text:\n\n`;
+        let includedPages = 0;
         for (let i = 0; i < pdf.pdfTextPages.length; i++) {
           if (pdf.pdfTextPages[i]) {
-            textContent += `--- PAGE ${i + 1} ---\n${pdf.pdfTextPages[i]}\n\n`;
+            const pageBlock = `--- PAGE ${i + 1} ---\n${pdf.pdfTextPages[i]}\n\n`;
+            // Approximate token count: ~1 token per 4 chars
+            if ((textContent.length + pageBlock.length) / 4 > contextBudget) {
+              textContent += `\n--- TRUNCATED: pages ${i + 1}–${pdf.pdfTotalPages} omitted (model context limit) ---\n`;
+              console.warn(`[PDF] Truncated at page ${i}/${pdf.pdfTotalPages} to fit ${model?.name || 'model'} context (${Math.round(contextBudget)} token budget)`);
+              break;
+            }
+            textContent += pageBlock;
+            includedPages++;
           }
         }
         apiMessages.push({ role: 'user' as const, content: textContent });
+        const truncNote = includedPages < pdf.pdfTotalPages
+          ? ` I received the first ${includedPages} of ${pdf.pdfTotalPages} pages (remaining pages exceeded the context limit).`
+          : '';
         apiMessages.push({
           role: 'assistant' as const,
-          content: `I've read the full text of the ${pdf.pdfTotalPages}-page PDF document. I can summarize, answer questions, or analyze its content. What would you like me to do?`,
+          content: `I've read the full text of the ${pdf.pdfTotalPages}-page PDF document.${truncNote} I can summarize, answer questions, or analyze its content. What would you like me to do?`,
         });
       }
     }
@@ -474,7 +513,7 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     }
 
     return apiMessages;
-  }, [messages, pdf.pdfThumbnails, pdf.pdfTextPages, pdf.pdfTotalPages, uploadedFiles]);
+  }, [messages, pdf.pdfThumbnails, pdf.pdfTextPages, pdf.pdfTotalPages, uploadedFiles, availableModels, selectedModel]);
 
   // ── Cancel generation ─────────────────────────────────────
   const cancelGeneration = useCallback(() => {
@@ -545,8 +584,8 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
       // Build initial system prompt and messages.
       // If keywords didn't detect presentation intent, the system prompt includes
       // INTENT_META_INSTRUCTION so the model can signal [PRESENTATION_INTENT].
-      let systemPrompt = buildSystemPrompt(text, presIntent || undefined);
-      let apiMessages = buildApiMessages(text, presIntent || undefined);
+      let systemPrompt = buildSystemPrompt(text, presIntent);
+      let apiMessages = buildApiMessages(text, presIntent);
 
       // max_tokens: use user's setting for presentations, deep thinking, and PDF contexts
       let maxTokens = (deepThinking || presIntent || pdf.pdfThumbnails.length > 0)
@@ -574,6 +613,22 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
         search: effectiveSearch,
         presentation: !!presIntent,
       });
+
+      // ── Guardrail: token estimation + hard cap ──────────────
+      const approxTokens = (JSON.stringify(apiMessages).length + systemPrompt.length) / 4;
+      console.log(`[API] ${presIntent ? 'PRES' : 'QA'} ~${Math.round(approxTokens)} tokens, max_out=${maxTokens}, msgs=${apiMessages.length}`);
+
+      const MAX_QA_TOKENS = 20_000;
+      // Count how many messages are trimmable conversation history (everything after
+      // the first 2 PDF-context entries, minus the final user message).
+      const trimmableCount = Math.max(0, apiMessages.length - 3); // 2 PDF + 1 current user
+      if (!presIntent && approxTokens > MAX_QA_TOKENS && trimmableCount > 0) {
+        console.warn(`[API] Q&A context exceeds ${MAX_QA_TOKENS} token cap (~${Math.round(approxTokens)}). Trimming ${trimmableCount} history messages.`);
+        while (apiMessages.length > 3 && (JSON.stringify(apiMessages).length + systemPrompt.length) / 4 > MAX_QA_TOKENS) {
+          apiMessages.splice(2, 1); // Remove oldest conversation message (after PDF context)
+        }
+        console.log(`[API] After trim: ~${Math.round((JSON.stringify(apiMessages).length + systemPrompt.length) / 4)} tokens, msgs=${apiMessages.length}`);
+      }
 
       let chatRequest = {
         messages: apiMessages,
@@ -1086,6 +1141,7 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
 
       // Auto-load PDFs
       if (file.type === 'application/pdf') {
+        thumbnailsSentRef.current = false; // Reset so new PDF gets thumbnails
         const doc = await pdf.loadPdf(dataURL);
         if (doc) {
           setActiveTab('pdf');
