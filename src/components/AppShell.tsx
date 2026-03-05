@@ -346,10 +346,8 @@ Return your answer as JSON ONLY, no other text:
             imagePrompt: customPrompt || baseContext,
           };
 
-          // Build basic speaker notes from the photo description
-          if (description) {
-            newSpeakerNotes = description + (credit ? ` (${credit})` : '');
-          }
+          // Image description and credit are already stored in figure.label and figure.caption;
+          // do NOT overwrite speaker notes with the image caption.
 
           if (credit) {
             updatedRefs = [...updatedRefs, `Image: ${credit}${imageUrl ? ` (${imageUrl})` : ''}`];

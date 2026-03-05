@@ -224,14 +224,13 @@ export default function PDFViewer({
         }}
         style={{
           flex: 1, overflow: 'auto', display: 'flex',
-          justifyContent: pdfZoom <= 1.0 ? 'center' : 'flex-start',
-          alignItems: 'flex-start', padding: '16px',
+          padding: '16px',
           backgroundColor: '#2A3342',
         }}
       >
         <canvas
           ref={pdfCanvasRef}
-          style={{ flexShrink: 0, boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
+          style={{ flexShrink: 0, margin: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
         />
       </div>
     </div>

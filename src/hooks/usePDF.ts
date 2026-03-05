@@ -31,6 +31,8 @@ export function usePDF(options?: UsePDFOptions) {
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
   const pdfContainerRef = useRef<HTMLDivElement>(null);
   const figureCacheRef = useRef<Record<string, string>>({});
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const activeRenderTaskRef = useRef<any>(null);
 
   /**
    * Load a PDF from a data URL.
@@ -178,6 +180,12 @@ export function usePDF(options?: UsePDFOptions) {
   const renderCurrentPage = useCallback(async () => {
     if (!pdfDoc || !pdfCanvasRef.current) return;
 
+    // Cancel any in-progress render to avoid "Cannot use the same canvas during multiple render()" errors
+    if (activeRenderTaskRef.current) {
+      try { activeRenderTaskRef.current.cancel(); } catch { /* already done */ }
+      activeRenderTaskRef.current = null;
+    }
+
     try {
       const page: PDFPageProxy = await pdfDoc.getPage(pdfPage);
       const canvas = pdfCanvasRef.current;
@@ -196,8 +204,13 @@ export function usePDF(options?: UsePDFOptions) {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      await page.render({ canvas, canvasContext: ctx, viewport }).promise;
-    } catch (e) {
+      const renderTask = page.render({ canvas, canvasContext: ctx, viewport });
+      activeRenderTaskRef.current = renderTask;
+      await renderTask.promise;
+      activeRenderTaskRef.current = null;
+    } catch (e: unknown) {
+      // Ignore cancellation errors — they're expected when zoom changes rapidly
+      if (e && typeof e === 'object' && 'name' in e && (e as { name: string }).name === 'RenderingCancelledException') return;
       console.error('PDF render error:', e);
     }
   }, [pdfDoc, pdfPage, pdfZoom]);
