@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { COLORS } from '@/src/lib/colors';
 import { decodeEntities } from '@/src/lib/presentation';
 import type { Slide, Figure } from '@/src/types';
@@ -28,6 +28,51 @@ interface SlideRendererProps {
   cropFn?: (page: number, region: number[] | string | undefined) => Promise<string | null>;
   /** Open the crop correction editor for pdf_crop figures */
   onShowCropEditor?: () => void;
+}
+
+/**
+ * Pre-process SVG HTML for responsive rendering.
+ * Removes intrinsic width/height attributes (capturing them into viewBox),
+ * and injects responsive inline styles so the SVG is correctly sized on
+ * **first paint** — eliminates the one-frame flash that occurred when the
+ * ref callback ran *after* the initial render with raw attributes.
+ */
+function preprocessSvgForResponsive(html: string): string {
+  return html.replace(/<svg\b([^>]*)>/i, (_match, attrs: string) => {
+    const wMatch = attrs.match(/\bwidth\s*=\s*["']([^"']+)["']/i);
+    const hMatch = attrs.match(/\bheight\s*=\s*["']([^"']+)["']/i);
+
+    let newAttrs = attrs;
+
+    // Capture width/height into viewBox before removing them
+    if (!/viewBox/i.test(attrs) && wMatch && hMatch) {
+      newAttrs += ` viewBox="0 0 ${wMatch[1]} ${hMatch[1]}"`;
+    }
+
+    // Remove width/height attributes — they force the SVG to its intrinsic size
+    newAttrs = newAttrs.replace(/\b(?:width|height)\s*=\s*["'][^"']*["']/gi, '');
+
+    // Ensure preserveAspectRatio
+    if (!/preserveAspectRatio/i.test(newAttrs)) {
+      newAttrs += ' preserveAspectRatio="xMidYMid meet"';
+    }
+
+    // Merge responsive CSS into existing style attribute, or add a new one
+    const responsiveCSS = 'display:block;width:auto;height:auto;max-width:100%;max-height:100%;overflow:hidden';
+    const styleMatch = newAttrs.match(/\bstyle\s*=\s*["']([^"']*)["']/i);
+    if (styleMatch) {
+      // Strip any existing width/height from inline styles before appending
+      const cleaned = styleMatch[1]
+        .replace(/\b(?:width|height)\s*:[^;]+;?/gi, '')
+        .replace(/;?\s*$/, '');
+      const merged = cleaned ? `${cleaned};${responsiveCSS}` : responsiveCSS;
+      newAttrs = newAttrs.replace(/\bstyle\s*=\s*["'][^"']*["']/i, `style="${merged}"`);
+    } else {
+      newAttrs += ` style="${responsiveCSS}"`;
+    }
+
+    return `<svg${newAttrs}>`;
+  });
 }
 
 // Corner bracket style helper
@@ -93,28 +138,16 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
   const textFlex = layout === 'figure_focus' ? '0 0 35%' : '1';
   const figureFlex = layout === 'figure_focus' ? '1 1 60%' : '1';
 
-  // SVG ref callback to auto-size SVGs.
-  // Removes intrinsic width/height attributes (after capturing them into viewBox)
-  // so they can't feed back into flex sizing on re-render and enlarge the container.
-  const svgRefCallback = useCallback((el: HTMLDivElement | null) => {
-    if (el) {
-      const svg = el.querySelector('svg');
-      if (svg) {
-        // Capture intrinsic dimensions into viewBox before removing them
-        if (!svg.getAttribute('viewBox') && svg.getAttribute('width') && svg.getAttribute('height')) {
-          svg.setAttribute('viewBox', `0 0 ${svg.getAttribute('width')} ${svg.getAttribute('height')}`);
-        }
-        svg.removeAttribute('width');
-        svg.removeAttribute('height');
-        svg.style.width = '100%';
-        svg.style.height = '100%';
-        svg.style.maxWidth = '100%';
-        svg.style.maxHeight = '100%';
-        svg.style.overflow = 'hidden';
-        svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-      }
-    }
-  }, [slide.figure]);
+  // Pre-process SVG HTML so it arrives in the DOM already responsive.
+  // This eliminates the one-frame "twitch" that occurred when a ref callback
+  // had to fix up width/height *after* the browser had already painted the
+  // SVG at its intrinsic size (most visible when the sidebar is closed and
+  // the slide area is wide enough for the SVG's raw dimensions to overflow).
+  const svgContent = fig?.type === 'svg' ? fig.content : undefined;
+  const processedSvgContent = useMemo(
+    () => (svgContent ? preprocessSvgForResponsive(svgContent) : ''),
+    [svgContent],
+  );
 
   // --- Image upgrade overlay buttons (shared by title + regular slides) ---
   const renderImageOverlay = () => {
@@ -331,8 +364,7 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
             opacity: 0.12, pointerEvents: 'none',
           }}>
             <div
-              ref={svgRefCallback}
-              dangerouslySetInnerHTML={{ __html: slide.figure!.content || '' }}
+              dangerouslySetInnerHTML={{ __html: processedSvgContent }}
               style={{ width: '85%', height: '85%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}
             />
           </div>
@@ -490,22 +522,27 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
     if (fig.type === 'svg') {
       return (
         <div style={{
-          flex: figureFlex, position: 'relative',
-          minHeight: 0, minWidth: 0, maxHeight: '100%',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          overflow: 'hidden',
+          flex: figureFlex, display: 'flex', flexDirection: 'column',
+          minHeight: 0, minWidth: 0, overflow: 'hidden',
         }}>
-          <div
-            style={{
-              width: '100%', height: '100%',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              overflow: 'hidden',
-            }}
-            ref={svgRefCallback}
-            dangerouslySetInnerHTML={{ __html: fig.content || '' }}
-          />
-          {renderImageOverlay()}
-          {renderImageLoadingOverlay()}
+          <div style={{
+            flex: 1, position: 'relative',
+            minHeight: 0, minWidth: 0, overflow: 'hidden',
+          }}>
+            {/* Absolute-positioned inner container breaks the flex ↔ SVG size feedback loop.
+                SVG HTML is pre-processed (width/height removed, viewBox + responsive styles injected)
+                so it renders correctly on first paint — no ref-callback delay flash. */}
+            <div
+              style={{
+                position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                overflow: 'hidden',
+              }}
+              dangerouslySetInnerHTML={{ __html: processedSvgContent }}
+            />
+            {renderImageOverlay()}
+            {renderImageLoadingOverlay()}
+          </div>
         </div>
       );
     }
@@ -517,6 +554,24 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
           alt={fig.label || ''}
           style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '8px' }}
         />
+      );
+    }
+
+    // Image with missing src (data URL was lost) — show placeholder so user can regenerate
+    if (fig.type === 'image' && !fig.src) {
+      return wrapWithOverlay(
+        <div style={{
+          padding: '20px', borderRadius: '12px',
+          border: `2px dashed ${COLORS.border}`, textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '32px', marginBottom: '8px', opacity: 0.5 }}>{'\uD83D\uDDBC\uFE0F'}</div>
+          <div style={{ color: COLORS.textMuted, fontSize: '13px' }}>
+            Image unavailable
+          </div>
+          <div style={{ color: COLORS.textDim, fontSize: '11px', marginTop: '4px' }}>
+            Use {'\uD83D\uDCDD'} Prompt to regenerate
+          </div>
+        </div>
       );
     }
 
@@ -553,7 +608,7 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
         flexDirection: isVertical ? 'column' : 'row',
         minHeight: 0, minWidth: 0, overflow: 'hidden',
       }}>
-        {/* Bullets */}
+        {/* Bullets + per-slide references (kept in the text column, not spanning under the figure) */}
         {hasContent && (
           <div style={{
             flex: isVertical && hasFigure ? '0 0 auto' : textFlex,
@@ -570,42 +625,42 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
                 <span>{renderWithCitations(decodeEntities(item))}</span>
               </div>
             ))}
+
+            {/* Per-slide footnote references — pinned below bullets */}
+            {slide.references && slide.references.length > 0 && (
+              <div style={{
+                marginTop: 'auto',
+                borderTop: `1px solid ${COLORS.border}`,
+                padding: '6px 0 2px',
+                maxHeight: '70px',
+                overflow: 'hidden',
+              }}>
+                {slide.references.map((ref, i) => (
+                  <div key={i} style={{
+                    fontSize: '10px',
+                    color: COLORS.textMuted,
+                    lineHeight: '1.4',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}>
+                    <span style={{
+                      color: COLORS.accent,
+                      fontWeight: 600,
+                      fontSize: '9px',
+                      marginRight: '4px',
+                    }}>
+                      [{i + 1}]
+                    </span>
+                    {ref}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {renderFigure()}
       </div>
-
-      {/* Per-slide footnote references */}
-      {slide.references && slide.references.length > 0 && (
-        <div style={{
-          flexShrink: 0,
-          borderTop: `1px solid ${COLORS.border}`,
-          padding: '6px 32px 4px',
-          maxHeight: '70px',
-          overflow: 'hidden',
-        }}>
-          {slide.references.map((ref, i) => (
-            <div key={i} style={{
-              fontSize: '10px',
-              color: COLORS.textMuted,
-              lineHeight: '1.4',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}>
-              <span style={{
-                color: COLORS.accent,
-                fontWeight: 600,
-                fontSize: '9px',
-                marginRight: '4px',
-              }}>
-                [{i + 1}]
-              </span>
-              {ref}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

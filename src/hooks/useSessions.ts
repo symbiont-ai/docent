@@ -27,13 +27,11 @@ const SESSION_PREFIX = 'docent:session:';
 function stripFigureForStorage(fig: Figure): Figure {
   const cleaned = { ...fig };
   delete cleaned.croppedDataURL;
-  // Strip base64 src but keep external URLs (http/https)
-  if (cleaned.src?.startsWith('data:')) {
+  // Strip base64 src ONLY if the figure can be re-cropped from the PDF (has page + region).
+  // AI-generated images (type: 'image') have no fallback — their data URL must be preserved.
+  if (cleaned.src?.startsWith('data:') && cleaned.page && cleaned.region) {
     delete cleaned.src;
-    // Convert back to pdf_crop so it re-crops on load
-    if (cleaned.page && cleaned.region) {
-      cleaned.type = 'pdf_crop';
-    }
+    cleaned.type = 'pdf_crop';
   }
   return cleaned;
 }

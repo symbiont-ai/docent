@@ -207,6 +207,7 @@ export default function SlideViewer({
       }}>
         {currentSlideData && (
           <SlideRenderer
+            key={currentSlide}
             slide={currentSlideData}
             slideNumber={currentSlide + 1}
             totalSlides={slides.length}
