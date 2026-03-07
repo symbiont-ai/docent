@@ -120,6 +120,7 @@ export async function extractFiguresFromPdf(
   textPages: string[],
   apiKey: string,
   signal?: AbortSignal,
+  model?: string,
 ): Promise<ExtractionResult> {
   const extractedAt = Date.now();
 
@@ -168,19 +169,20 @@ export async function extractFiguresFromPdf(
       role: 'user' as const,
       content: contentBlocks,
     }],
-    model: EXTRACTION_MODEL,
+    model: model || EXTRACTION_MODEL,
     max_tokens: EXTRACTION_MAX_TOKENS,
     system: EXTRACTION_SYSTEM_PROMPT,
   };
 
-  const raw = await callChat(request, apiKey, signal);
+  const effectiveModel = model || EXTRACTION_MODEL;
+  const { content: raw } = await callChat(request, apiKey, signal);
   const figures = parseExtractionResponse(raw);
 
-  console.log(`[Extraction] Found ${figures.length} visual elements across ${mainBodyEnd} pages`);
+  console.log(`[Extraction] Found ${figures.length} visual elements across ${mainBodyEnd} pages (model: ${effectiveModel})`);
 
   return {
     figures,
-    model: EXTRACTION_MODEL,
+    model: effectiveModel,
     extractedAt,
     mainBodyPages: mainBodyEnd,
     supplementaryStartPage: suppPage || undefined,
@@ -195,25 +197,64 @@ export function parseExtractionResponse(raw: string): ExtractedFigure[] {
   const jsonBlock = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
   if (jsonBlock) jsonStr = jsonBlock[1];
 
-  let parsed: { figures: Array<{
-    kind: string; page: number; region: number[]; label?: string; description: string;
-  }> };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let parsed: any;
 
   try {
     parsed = JSON.parse(jsonStr.trim());
   } catch {
-    // Attempt repair: find first { to last }
-    const start = jsonStr.indexOf('{');
-    const end = jsonStr.lastIndexOf('}');
-    if (start === -1 || end === -1) {
-      console.error('[Extraction] No valid JSON found in response');
-      return [];
+    // Attempt repair: try bare array [...] first
+    const arrStart = jsonStr.indexOf('[');
+    const arrEnd = jsonStr.lastIndexOf(']');
+    if (arrStart !== -1 && arrEnd > arrStart) {
+      try {
+        const arr = JSON.parse(jsonStr.substring(arrStart, arrEnd + 1));
+        if (Array.isArray(arr)) {
+          console.warn('[Extraction] Parsed response as bare JSON array');
+          parsed = { figures: arr };
+        }
+      } catch { /* continue to brace-based repair */ }
     }
-    try {
-      parsed = JSON.parse(jsonStr.substring(start, end + 1));
-    } catch {
-      console.error('[Extraction] Failed to parse JSON response');
-      return [];
+
+    if (!parsed) {
+      // Attempt repair: find first { to last }
+      const start = jsonStr.indexOf('{');
+      const end = jsonStr.lastIndexOf('}');
+      if (start === -1 || end === -1) {
+        console.error('[Extraction] No valid JSON found in response. Raw (first 500 chars):', jsonStr.slice(0, 500));
+        return [];
+      }
+      try {
+        parsed = JSON.parse(jsonStr.substring(start, end + 1));
+      } catch {
+        console.error('[Extraction] Failed to parse JSON response. Raw (first 500 chars):', jsonStr.slice(0, 500));
+        return [];
+      }
+    }
+  }
+
+  // Recovery: check for alternative response shapes from weak/free models
+  if (!parsed?.figures || !Array.isArray(parsed.figures)) {
+    // 1. Model used a different top-level key name
+    const altKeys = ['results', 'elements', 'data', 'images', 'items', 'visual_elements', 'extractions'];
+    for (const key of altKeys) {
+      if (Array.isArray(parsed?.[key])) {
+        console.warn(`[Extraction] Response used "${key}" instead of "figures" — adapting`);
+        parsed = { figures: parsed[key] };
+        break;
+      }
+    }
+
+    // 2. Model returned a bare JSON array (no wrapping object)
+    if ((!parsed?.figures || !Array.isArray(parsed.figures)) && Array.isArray(parsed)) {
+      console.warn('[Extraction] Response is a bare array — wrapping as figures');
+      parsed = { figures: parsed };
+    }
+
+    // 3. Model returned a single figure object without array wrapping
+    if ((!parsed?.figures || !Array.isArray(parsed.figures)) && parsed?.page && Array.isArray(parsed?.region)) {
+      console.warn('[Extraction] Response is a single figure object — wrapping');
+      parsed = { figures: [parsed] };
     }
   }
 
@@ -223,7 +264,10 @@ export function parseExtractionResponse(raw: string): ExtractedFigure[] {
   }
 
   // Validate, clamp, sanity-check, and assign IDs
-  return parsed.figures
+  const figures = parsed.figures as Array<{
+    kind: string; page: number; region: number[]; label?: string; description: string;
+  }>;
+  return figures
     .filter(f => f.page > 0 && Array.isArray(f.region) && f.region.length === 4)
     .map((f, i) => {
       const clamped = clampRegion(f.region);

@@ -24,6 +24,7 @@ export default function AppShell() {
     voiceGender, setVoiceGender, apiKey, setApiKey, selectedModel,
     setSelectedModel, availableModels, modelsLoading,
     maxOutputTokens, setMaxOutputTokens,
+    extractionModel, setExtractionModel,
     lastTokenUsage,
     showSidebar, setShowSidebar, savedSessions,
     currentSessionId, loadingSessions, sessionBusy, sageMemory,
@@ -276,7 +277,7 @@ Return your answer as JSON ONLY, no other text:
           console.log(`[Find Photo] Attempt ${attempt}/${MAX_SEARCH_ATTEMPTS}, prompt length: ${searchPrompt.length}`);
 
           // Use the chat API with search enabled to find a real image
-          const searchResult = await callChat(
+          const { content: searchResult } = await callChat(
             {
               messages: [{ role: 'user', content: searchPrompt }],
               model: selectedModel || 'anthropic/claude-sonnet-4',
@@ -819,6 +820,8 @@ Return your answer as JSON ONLY, no other text:
         maxOutputTokens={maxOutputTokens}
         setMaxOutputTokens={setMaxOutputTokens}
         modelMaxTokens={modelMaxTokens}
+        extractionModel={extractionModel}
+        setExtractionModel={setExtractionModel}
       />
     </div>
   );

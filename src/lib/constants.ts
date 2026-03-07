@@ -285,6 +285,29 @@ If no number is specified, create 8-15 content slides depending on topic depth.
 
 Use svg figures extensively for topics without uploaded images. Vary diagram types across slides — do NOT use the same diagram style (e.g. flowchart) for every slide. Mix flowcharts, tables, timelines, schematics, networks, and bar charts to keep the presentation visually engaging.`;
 
+// Mode-specific narrative stance prompts (appended to system prompt in Pass 2)
+export const AUTHOR_MODE_PROMPT = `NARRATIVE STANCE — AUTHOR ADVOCACY:
+You are helping the researcher present THEIR OWN work. Frame everything as advocacy for their contribution:
+- Use first person: "we propose", "our approach", "we demonstrate", "our results show"
+- Lead with the problem and THEIR solution, not a background survey
+- Emphasize novelty and advantages over prior work
+- Results slides should highlight THEIR improvements — use comparative language ("outperforms", "achieves state-of-the-art", "X% improvement over")
+- Be confident but respectful of prior work — acknowledge foundations while emphasizing the advance
+- Conclude with impact, broader implications, and future directions for THEIR line of research
+- Speaker notes should coach the presenter: "emphasize the key innovation here", "point out the performance gap"`;
+
+export const JOURNAL_CLUB_PROMPT = `NARRATIVE STANCE — CRITICAL ANALYSIS:
+You are presenting someone else's paper for a journal club discussion. Frame everything as critical evaluation:
+- Use third person: "the authors propose", "this study examines", "they report"
+- Start with the paper's central claim and why it matters to the field
+- Dedicate slides to methodology assessment — what was done well, what raises concerns
+- Highlight statistical rigor (or lack thereof): sample sizes, controls, effect sizes, significance
+- Include a "Limitations" slide explicitly listing methodological and scope constraints
+- Include a "Discussion Points" slide with 3-5 open questions for the group to debate
+- Be balanced: acknowledge strengths before critiquing weaknesses
+- End with a "verdict" slide — is the main claim well-supported by the evidence?
+- Speaker notes should prompt discussion: "ask the group whether...", "a good question here would be..."`;
+
 // Intent detection meta-instruction — appended to system prompt when keyword check misses.
 // Tells the model to signal presentation intent instead of answering, so we can retry with full prompt.
 // For non-presentation messages the model just answers normally → zero delay.

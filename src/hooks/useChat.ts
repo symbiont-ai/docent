@@ -40,11 +40,14 @@ import type {
   TTSEngine,
   ImageCatalogEntry,
   ExtractedFigure,
+  NarrativeArcEntry,
+  PresentationPlan,
+  PresentationMode,
 } from '@/src/types';
 import { callChat, callChatStream } from '@/src/lib/api';
 import type { TokenUsage } from '@/src/lib/api';
 import type { ModelOption } from '@/src/types';
-import { PRESENTATION_PROMPT, PRESENTATION_WORKFLOW, DEFAULT_MODEL, FALLBACK_MODELS, INTENT_META_INSTRUCTION } from '@/src/lib/constants';
+import { PRESENTATION_PROMPT, PRESENTATION_WORKFLOW, DEFAULT_MODEL, FALLBACK_MODELS, INTENT_META_INSTRUCTION, AUTHOR_MODE_PROMPT, JOURNAL_CLUB_PROMPT } from '@/src/lib/constants';
 import {
   isPresentationIntent,
   extractPresentationJson,
@@ -64,12 +67,112 @@ import {
   preCropExtractedFigures,
   buildExtractedFigureCatalog,
   detectSupplementaryBoundary,
+  EXTRACTION_MODEL,
 } from '@/src/lib/figure-extraction';
+import {
+  detectPresentationMode,
+  detectPlanResponse,
+  formatPlanForChat,
+} from '@/src/lib/presentation-modes';
 import { useTTS } from './useTTS';
 import { useMemory } from './useMemory';
 import { usePDF } from './usePDF';
 import { usePresentation } from './usePresentation';
 import { useSessions } from './useSessions';
+
+// ── Narrative arc planning ──────────────────────────────────
+// This planning call runs on the MAIN model (user's selected model) with optional
+// deep thinking, producing a narrative arc and paper summary from the figure catalog
+// and PDF text. Separated from the cheap vision model (Gemini Flash) which only
+// handles figure/table detection.
+
+const NARRATIVE_FRAMING: Record<PresentationMode, string> = {
+  general: `Frame as a balanced overview — cover background, methods, key results, and conclusions evenly. Give each aspect proportional attention.`,
+  author: `Frame as advocacy — lead with the problem the authors solved, then their method and its novelty, then results that demonstrate superiority over prior work. Emphasize contribution and impact.`,
+  journal_club: `Frame as critical analysis — lead with the paper's central claim, then examine methodology strengths and weaknesses, assess evidence quality, identify limitations, and end with discussion points for the group.`,
+};
+
+function buildNarrativePlanningPrompt(
+  figures: ExtractedFigure[],
+  textSummary: string,
+  mode: PresentationMode,
+): string {
+  const figureCatalog = figures.map(f =>
+    `  - ${f.id}: ${f.label || f.kind} (page ${f.page}) — ${f.description}`
+  ).join('\n');
+
+  return `You are planning a presentation about a research paper. Your task is to produce a structured slide plan — NOT the slides themselves.
+
+PAPER TEXT (first ~2000 tokens):
+${textSummary}
+
+AVAILABLE VISUAL ELEMENTS (from figure extraction):
+${figureCatalog || '  (no figures/tables detected)'}
+
+NARRATIVE STANCE:
+${NARRATIVE_FRAMING[mode]}
+
+Produce a JSON object with exactly two fields:
+
+1. "paper_summary": A 2-3 sentence summary of the paper's main contribution and key findings.
+
+2. "narrative_arc": An ordered slide plan. Each entry:
+   { "slide_number": N, "title": "Slide Title", "element_ids": ["ef_1"], "purpose": "One-line description of what this slide accomplishes" }
+
+   Rules:
+   - Plan 8-12 content slides (do NOT include title or closing slides — those are added automatically).
+   - Reference element_ids from the figure catalog above (e.g. "ef_1", "ef_2") for slides that should show a visual.
+   - Not every slide needs a visual — text-only overview or conclusion slides are fine (use empty element_ids: []).
+   - Order slides to tell a coherent story: context → method → results → implications.
+
+Output ONLY valid JSON:
+{
+  "paper_summary": "...",
+  "narrative_arc": [
+    { "slide_number": 1, "title": "...", "element_ids": [...], "purpose": "..." },
+    ...
+  ]
+}`;
+}
+
+function parseNarrativePlanResponse(raw: string): {
+  narrative_arc: NarrativeArcEntry[];
+  paper_summary: string;
+} {
+  let narrative_arc: NarrativeArcEntry[] = [];
+  let paper_summary = '';
+
+  try {
+    let jsonStr = raw;
+    const jsonBlock = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (jsonBlock) jsonStr = jsonBlock[1];
+
+    const start = jsonStr.indexOf('{');
+    const end = jsonStr.lastIndexOf('}');
+    if (start !== -1 && end !== -1) {
+      const parsed = JSON.parse(jsonStr.substring(start, end + 1));
+
+      if (typeof parsed.paper_summary === 'string') {
+        paper_summary = parsed.paper_summary;
+      }
+
+      if (Array.isArray(parsed.narrative_arc)) {
+        narrative_arc = parsed.narrative_arc
+          .filter((e: { slide_number?: number; title?: string }) => e.slide_number && e.title)
+          .map((e: { slide_number: number; title: string; element_ids?: string[]; purpose?: string }, i: number) => ({
+            slide_number: e.slide_number || (i + 1),
+            title: e.title,
+            element_ids: Array.isArray(e.element_ids) ? e.element_ids : [],
+            purpose: e.purpose || '',
+          }));
+      }
+    }
+  } catch (err) {
+    console.warn('[Planning] Failed to parse narrative arc response:', err);
+  }
+
+  return { narrative_arc, paper_summary };
+}
 
 export function useChat() {
   // ── Core chat state ──────────────────────────────────────
@@ -80,6 +183,11 @@ export function useChat() {
   const [error, setError] = useState<string | null>(null);
   const [searchMode, setSearchMode] = useState(false);
   const [deepThinking, setDeepThinking] = useState(false);
+
+  // ── Presentation plan state (bridges Pass 1 ↔ Pass 2 for Author/JournalClub modes) ──
+  const [pendingPlan, setPendingPlan] = useState<PresentationPlan | null>(null);
+  const pendingPlanRef = useRef<PresentationPlan | null>(null);
+  useEffect(() => { pendingPlanRef.current = pendingPlan; }, [pendingPlan]);
 
   // ── File state ───────────────────────────────────────────
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -95,6 +203,7 @@ export function useChat() {
   const [ttsEngine, setTTSEngine] = useState<TTSEngine>('browser');
   const [googleApiKey, setGoogleApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL);
+  const [extractionModel, setExtractionModel] = useState(EXTRACTION_MODEL);
   const [apiKey, setApiKey] = useState('');
   const [availableModels, setAvailableModels] = useState<ModelOption[]>(FALLBACK_MODELS);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -131,6 +240,8 @@ export function useChat() {
     if (storedEngine === 'browser' || storedEngine === 'gemini') setTTSEngine(storedEngine);
     const storedGoogleKey = localStorage.getItem('docent:googleApiKey');
     if (storedGoogleKey) setGoogleApiKey(storedGoogleKey);
+    const storedExtractionModel = localStorage.getItem('docent:extractionModel');
+    if (storedExtractionModel) setExtractionModel(storedExtractionModel);
   }, []);
 
   // Persist API key changes
@@ -160,6 +271,12 @@ export function useChat() {
       localStorage.setItem('docent:googleApiKey', googleApiKey);
     }
   }, [googleApiKey]);
+
+  // Persist extraction model changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('docent:extractionModel', extractionModel);
+  }, [extractionModel]);
 
   // ── Fetch models from OpenRouter when API key changes ────
   useEffect(() => {
@@ -246,7 +363,7 @@ export function useChat() {
   // ── Build system prompt ───────────────────────────────────
   // Accepts userText so we can conditionally include presentation rules.
   // forcePresIntent overrides the keyword check (used after model-based intent detection).
-  const buildSystemPrompt = useCallback((userText: string, forcePresIntent?: boolean): string => {
+  const buildSystemPrompt = useCallback((userText: string, forcePresIntent?: boolean, plan?: PresentationPlan | null): string => {
     // Base identity — always present
     const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     let prompt = `You are Sage, the AI assistant powering Docent — an intelligent presentation and research tool built by Symbiont AI Cognitive Labs. You read papers, analyze topics, and create clear, engaging presentations with beautiful SVG diagrams. You speak with confidence and warmth, making complex topics accessible.
@@ -260,8 +377,38 @@ You can save important observations, user preferences, and key findings using [N
 
     if (isPres) {
       // Presentation mode: include workflow + generation rules
-      prompt += `\n\n${PRESENTATION_WORKFLOW}`;
+      // When a plan exists (Author/JournalClub confirmed), skip PRESENTATION_WORKFLOW
+      // since the user already reviewed and approved the plan — go straight to generation.
+      if (!plan) {
+        prompt += `\n\n${PRESENTATION_WORKFLOW}`;
+      }
       prompt += `\n\n${PRESENTATION_PROMPT}`;
+
+      // Mode-specific narrative stance
+      if (plan) {
+        if (plan.mode === 'author') {
+          prompt += `\n\n${AUTHOR_MODE_PROMPT}`;
+        } else if (plan.mode === 'journal_club') {
+          prompt += `\n\n${JOURNAL_CLUB_PROMPT}`;
+        }
+
+        // Inject the narrative arc as a structural guide for Pass 2
+        if (plan.narrative_arc.length > 0) {
+          const arcLines = plan.narrative_arc.map(e =>
+            `Slide ${e.slide_number}: "${e.title}" — figures: [${e.element_ids.join(', ')}] — ${e.purpose}`
+          ).join('\n');
+          prompt += `\n\nSLIDE PLAN (follow this structure — you may refine titles but maintain the ordering and figure assignments):
+${arcLines}
+
+IMPORTANT: Use the element_ids above when referencing figures. Use "extracted_ref" with the extractedId matching the element_id (e.g., {"type": "extracted_ref", "extractedId": "ef_1", "label": "..."}).
+Do NOT predict new crop coordinates — use only the verified figures from the catalog.`;
+        }
+
+        // Paper summary for additional context
+        if (plan.paper_summary) {
+          prompt += `\n\nPAPER SUMMARY: ${plan.paper_summary}`;
+        }
+      }
     }
 
     // Memory context — always include
@@ -660,6 +807,216 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     setError(null);
     setInput('');
 
+    // ── Pending plan check (Author / Journal Club modes) ──
+    // If a plan is waiting for user confirmation, handle it before normal flow.
+    const plan = pendingPlanRef.current;
+    if (plan) {
+      // Add user message to chat
+      const planUserMsg: Message = { id: Date.now(), sender: 'user', text };
+      setMessages(prev => [...prev, planUserMsg]);
+
+      const planResponse = detectPlanResponse(text);
+      if (planResponse === 'confirm') {
+        // User confirmed — clear plan and run Pass 2
+        console.log(`[Plan] User confirmed ${plan.mode} plan — starting Pass 2`);
+        setPendingPlan(null);
+        pendingPlanRef.current = null;
+        extractedFiguresRef.current = plan.figures;
+        thumbnailsSentRef.current = false; // Will be set in buildApiMessages
+
+        setIsLoading(true);
+        presInProgressRef.current = true;
+        setLoadingMsg('Generating slides...');
+
+        const gen = ++requestGenRef.current;
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        try {
+          const systemPrompt = buildSystemPrompt(plan.userText, true, plan);
+          const apiMessages = buildApiMessages(plan.userText, true);
+          const currentModel = availableModels.find(m => m.id === selectedModel);
+          const modelCap = currentModel?.maxCompletionTokens || 32000;
+          const slideCountGuess = plan.userText.match(/(\d+)\s*(?:slides?|slayt)/i);
+          const slides = slideCountGuess ? parseInt(slideCountGuess[1], 10) : plan.narrative_arc.length || 8;
+          const maxTokens = Math.min((slides + 3) * 4000 + 2000, modelCap);
+          const requestTimeout = computeTimeout(currentModel, {
+            deepThinking: false,
+            hasPdf: true,
+            search: false,
+            presentation: true,
+          });
+
+          // Add thinking placeholder
+          const thinkingMsg: Message = { id: Date.now() + 1, sender: 'sage', text: '', isThinking: true };
+          setMessages(prev => [...prev, thinkingMsg]);
+
+          const chatRequest = {
+            messages: apiMessages,
+            model: selectedModel,
+            max_tokens: maxTokens,
+            system: systemPrompt,
+            timeout: requestTimeout,
+          };
+
+          let streamingStarted = false;
+          const incrementalParseRef2 = { current: createIncrementalParseState() };
+
+          const streamResult = await callChatStream(
+            chatRequest, apiKey,
+            (_delta: string, fullText: string) => {
+              if (gen !== requestGenRef.current || cancelledGens.current.has(gen)) return;
+              lastActivityRef.current = Date.now();
+
+              const { newSlides, updatedState } = extractIncrementalSlides(fullText, incrementalParseRef2.current);
+              incrementalParseRef2.current = updatedState;
+
+              if (newSlides.length > 0) {
+                if (!streamingStarted) {
+                  streamingStarted = true;
+                  presentation.startStreamingSlides(updatedState.title, updatedState.language);
+                  setActiveTab('slides');
+                  setMessages(prev => prev.filter(m => !m.isThinking));
+                }
+                presentation.addStreamingSlides(newSlides, extractedFiguresRef.current || undefined);
+              }
+
+              if (updatedState.extractedCount > 0) {
+                setLoadingMsg(`Generating slides... ${updatedState.extractedCount} received`);
+              }
+            },
+            controller.signal,
+          );
+
+          if (gen !== requestGenRef.current || cancelledGens.current.has(gen)) return;
+          presentation.finalizePresentation();
+
+          // Capture token usage from Pass 2 stream
+          if (streamResult.usage) {
+            setLastTokenUsage(streamResult.usage);
+          }
+
+          // Post-generation: add assistant message confirming the mode
+          const modeLabel = plan.mode === 'author' ? 'author presentation' : 'journal club analysis';
+          const sageDoneMsg: Message = {
+            id: Date.now() + 2,
+            sender: 'sage',
+            text: `Your ${modeLabel} is ready! Navigate through the slides using the controls above.`,
+          };
+          setMessages(prev => [...prev.filter(m => !m.isThinking), sageDoneMsg]);
+
+          // Save session — plan confirm path doesn't reach the normal save at end of handleSend
+          const msgsToSave = messages.concat(planUserMsg, sageDoneMsg);
+          await sessions.saveSession(
+            msgsToSave,
+            sessions.currentSessionId || undefined,
+            uploadedFiles,
+            presentation.presentationRef.current.slides.length > 0 ? presentation.presentationRef.current : null,
+            pdf.pdfPage,
+            pdf.pdfZoom,
+            streamResult.usage || null,
+            selectedModel,
+          );
+        } catch (err) {
+          if (gen !== requestGenRef.current || cancelledGens.current.has(gen)) return;
+          console.error('[Plan Pass 2] Error:', err);
+          setError(err instanceof Error ? err.message : 'Failed to generate presentation');
+          setMessages(prev => prev.filter(m => !m.isThinking));
+        } finally {
+          setIsLoading(false);
+          setLoadingMsg('');
+          presInProgressRef.current = false;
+        }
+        return;
+      } else {
+        // User wants edits — send feedback to cheap model for plan revision
+        console.log(`[Plan] User editing ${plan.mode} plan: "${text.slice(0, 80)}..."`);
+        setIsLoading(true);
+        setLoadingMsg('Revising plan...');
+
+        try {
+          const editPrompt = `You are revising a presentation slide plan based on user feedback.
+
+Current plan (${plan.mode} mode):
+${JSON.stringify(plan.narrative_arc, null, 2)}
+
+Paper summary: ${plan.paper_summary}
+
+Available figures: ${plan.figures.map(f => `${f.id}: ${f.label || f.kind} (page ${f.page})`).join(', ')}
+
+User says: "${text}"
+
+Output ONLY valid JSON with the revised plan:
+{ "narrative_arc": [...] }
+Keep the same entry format: { "slide_number": N, "title": "...", "element_ids": [...], "purpose": "..." }
+Only modify what the user requested. Maintain reasonable slide count (8-12).`;
+
+          const { content: editResponse } = await callChat({
+            messages: [{ role: 'user' as const, content: editPrompt }],
+            model: selectedModel,
+            max_tokens: 4096,
+            system: 'You are a presentation planning assistant. Output only valid JSON.',
+          }, apiKey);
+
+          // Parse the revised plan
+          let updatedArc = plan.narrative_arc;
+          try {
+            let jsonStr = editResponse;
+            const jsonBlock = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+            if (jsonBlock) jsonStr = jsonBlock[1];
+            const start = jsonStr.indexOf('{');
+            const end = jsonStr.lastIndexOf('}');
+            if (start !== -1 && end !== -1) {
+              const parsed = JSON.parse(jsonStr.substring(start, end + 1));
+              if (Array.isArray(parsed.narrative_arc)) {
+                updatedArc = parsed.narrative_arc.filter(
+                  (e: { slide_number?: number; title?: string }) => e.slide_number && e.title
+                );
+              }
+            }
+          } catch (parseErr) {
+            console.warn('[Plan] Failed to parse revised plan, keeping original:', parseErr);
+          }
+
+          // Update the pending plan
+          const updatedPlan: PresentationPlan = { ...plan, narrative_arc: updatedArc };
+          setPendingPlan(updatedPlan);
+          pendingPlanRef.current = updatedPlan;
+
+          // Post revised plan in chat
+          const revisedText = formatPlanForChat(
+            updatedArc, plan.paper_summary, plan.figures, plan.mode,
+          );
+          const revisedMsg: Message = { id: Date.now() + 2, sender: 'sage', text: revisedText };
+          setMessages(prev => [...prev, revisedMsg]);
+
+          // Save conversation with revised plan
+          const currentMsgs = messages.concat(planUserMsg, revisedMsg);
+          await sessions.saveSession(
+            currentMsgs,
+            sessions.currentSessionId || undefined,
+            uploadedFiles,
+            null,
+            pdf.pdfPage,
+            pdf.pdfZoom,
+            null,
+            selectedModel,
+          );
+        } catch (err) {
+          console.error('[Plan] Edit failed:', err);
+          const errorMsg: Message = {
+            id: Date.now() + 2, sender: 'sage',
+            text: 'I had trouble revising the plan. Could you try rephrasing your request? Or say "looks good" to proceed with the current plan.',
+          };
+          setMessages(prev => [...prev, errorMsg]);
+        } finally {
+          setIsLoading(false);
+          setLoadingMsg('');
+        }
+        return;
+      }
+    }
+
     // Only treat as presentation intent if the *current* message asks for one.
     // Checking history caused follow-up questions to show "creating presentation..." loading.
     let presIntent = isPresentationIntent(text);
@@ -707,19 +1064,21 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     abortRef.current = controller;
 
     try {
-      // ── Pass 1: Figure extraction (runs inline before Pass 2) ──
-      // When generating a presentation from a PDF, first run a cheap vision model
-      // to locate all figures/tables/equations, then crop them. This replaces
-      // sending all 30 full-page thumbnails (~$1+) with small crops (~$0.10-0.30).
+      // ── Pass 1a: Figure extraction (cheap vision model) ──
+      // Gemini Flash locates figures/tables/diagrams — no narrative planning here.
       extractedFiguresRef.current = null; // Reset from any previous run
+      const detectedMode: PresentationMode = presIntent ? detectPresentationMode(text) : 'general';
+      let activePlan: PresentationPlan | null = null;
+
       if (presIntent && pdf.pdfDoc && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
         try {
-          setLoadingMsg('Analyzing figures...');
+          setLoadingMsg('Analyzing paper structure and figures...');
           const extractionResult = await extractFiguresFromPdf(
             pdf.pdfThumbnails,
             pdf.pdfTextPages,
             apiKey,
             controller.signal,
+            extractionModel,
           );
 
           if (controller.signal.aborted) throw new Error('Aborted');
@@ -732,26 +1091,103 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
               pdf.figureCacheRef.current,
             );
             extractedFiguresRef.current = cropped;
-            console.log(`[Extraction] Pass 1 complete: ${cropped.length} figures cropped`,
+            console.log(`[Extraction] Pass 1a complete: ${cropped.length} figures cropped`,
               extractionResult.supplementaryStartPage ? `| Supplementary starts at page ${extractionResult.supplementaryStartPage}` : '');
-            console.log('[Extraction] Catalog:', cropped.map(f =>
-              `${f.id}: ${f.kind} "${f.label || '?'}" p${f.page} [${f.region.map(n => n.toFixed(2)).join(',')}]`
-            ).join(' | '));
           } else {
-            console.log('[Extraction] Pass 1 found no figures — will use thumbnail fallback');
+            console.log('[Extraction] Pass 1a found no figures — will use thumbnail fallback');
+          }
+
+          // ── Pass 1b: Narrative planning (main model, with optional deep thinking) ──
+          // The main model (user's selected model) plans the slide structure using
+          // the figure catalog + paper text. Deep thinking is enabled if the user has it on.
+          if (controller.signal.aborted) throw new Error('Aborted');
+
+          setLoadingMsg(deepThinking ? 'Planning presentation (thinking deeply)...' : 'Planning presentation structure...');
+          const textSummary = pdf.pdfTextPages.slice(0, 5).join('\n').slice(0, 4000);
+          const planningPrompt = buildNarrativePlanningPrompt(
+            extractedFiguresRef.current || extractionResult.figures,
+            textSummary,
+            detectedMode,
+          );
+
+          const currentModel = availableModels.find(m => m.id === selectedModel);
+          const planRequest = {
+            messages: [{ role: 'user' as const, content: planningPrompt }],
+            model: selectedModel,
+            max_tokens: 4096,
+            system: 'You are a presentation planning assistant. Output ONLY valid JSON with the requested structure. No explanations, no markdown formatting outside the JSON.',
+            timeout: computeTimeout(currentModel, { deepThinking, hasPdf: true, search: false, presentation: false }),
+            options: {
+              thinking: deepThinking,
+              thinkingBudget: deepThinking ? 10000 : undefined,
+            },
+          };
+
+          const planResult = await callChat(planRequest, apiKey, controller.signal);
+          const { narrative_arc, paper_summary } = parseNarrativePlanResponse(planResult.content);
+
+          console.log(`[Planning] Pass 1b complete: ${narrative_arc.length} planned slides (mode: ${detectedMode}, thinking: ${deepThinking})`,
+            planResult.usage ? `| Tokens: ${planResult.usage.prompt_tokens} in / ${planResult.usage.completion_tokens} out` : '');
+
+          // Build plan for mode-aware flow
+          if (narrative_arc.length > 0) {
+            activePlan = {
+              mode: detectedMode,
+              narrative_arc,
+              paper_summary,
+              figures: extractedFiguresRef.current || [],
+              userText: text,
+            };
+          }
+
+          // ── Author / Journal Club: surface plan and wait ──
+          if (detectedMode !== 'general' && activePlan && activePlan.narrative_arc.length > 0) {
+            const planText = formatPlanForChat(
+              activePlan.narrative_arc,
+              activePlan.paper_summary,
+              activePlan.figures,
+              activePlan.mode,
+            );
+            const planMsg: Message = { id: Date.now() + 2, sender: 'sage', text: planText };
+            setMessages(prev => [...prev.filter(m => !m.isThinking), planMsg]);
+
+            // Store plan — pipeline pauses here until user confirms
+            setPendingPlan(activePlan);
+            pendingPlanRef.current = activePlan;
+
+            console.log(`[Plan] ${detectedMode} plan surfaced — waiting for user confirmation`);
+
+            // Save conversation so far (plan surface messages)
+            const msgsToSave = [...newMessages.filter(m => !m.isThinking), planMsg];
+            await sessions.saveSession(
+              msgsToSave,
+              sessions.currentSessionId || undefined,
+              uploadedFiles,
+              null,
+              pdf.pdfPage,
+              pdf.pdfZoom,
+              null,
+              selectedModel,
+            );
+
+            setIsLoading(false);
+            setLoadingMsg('');
+            presInProgressRef.current = false;
+            return; // ← Pipeline splits here. Pass 2 runs when user confirms.
           }
         } catch (extractErr) {
           if (controller.signal.aborted) throw extractErr;
-          console.warn('[Extraction] Pass 1 failed (will use thumbnail fallback):', extractErr);
+          console.warn('[Extraction/Planning] Pass 1 failed (will use thumbnail fallback):', extractErr);
           // Continue with fallback (thumbnails) — extractedFiguresRef stays null
         }
-        setLoadingMsg('Sage is creating your presentation...');
+        setLoadingMsg('Generating slides...');
       }
 
       // Build initial system prompt and messages.
       // If keywords didn't detect presentation intent, the system prompt includes
       // INTENT_META_INSTRUCTION so the model can signal [PRESENTATION_INTENT].
-      let systemPrompt = buildSystemPrompt(text, presIntent);
+      // For General mode with a plan, pass the plan for structural guidance.
+      let systemPrompt = buildSystemPrompt(text, presIntent, activePlan);
       let apiMessages = buildApiMessages(text, presIntent);
 
       // max_tokens: use user's setting for presentations, deep thinking, and PDF contexts
@@ -926,29 +1362,85 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
                 m.isThinking ? { ...m, text: '' } : m
               ));
 
-              // Run Pass 1 extraction if we have a PDF (same logic as initial path)
+              // Run Pass 1 extraction + planning if we have a PDF (same logic as initial path)
+              const retryMode = detectPresentationMode(text);
+              let retryPlan: PresentationPlan | null = null;
               if (pdf.pdfDoc && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
                 try {
-                  setLoadingMsg('Analyzing figures...');
+                  // Pass 1a: Figure extraction (cheap vision model)
+                  setLoadingMsg('Analyzing paper structure and figures...');
                   const extractionResult = await extractFiguresFromPdf(
-                    pdf.pdfThumbnails, pdf.pdfTextPages, apiKey, controller.signal,
+                    pdf.pdfThumbnails, pdf.pdfTextPages, apiKey, controller.signal, extractionModel,
                   );
                   if (!controller.signal.aborted && extractionResult.figures.length > 0) {
                     setLoadingMsg(`Cropping ${extractionResult.figures.length} figures...`);
                     extractedFiguresRef.current = await preCropExtractedFigures(
                       extractionResult.figures, pdf.pdfDoc, pdf.figureCacheRef.current,
                     );
-                    console.log(`[Extraction] Pass 1 (retry): ${extractedFiguresRef.current.length} figures cropped`);
+                    console.log(`[Extraction] Pass 1a (retry): ${extractedFiguresRef.current.length} figures cropped`);
+                  }
+
+                  // Pass 1b: Narrative planning (main model)
+                  if (!controller.signal.aborted) {
+                    setLoadingMsg(deepThinking ? 'Planning presentation (thinking deeply)...' : 'Planning presentation structure...');
+                    const textSummary = pdf.pdfTextPages.slice(0, 5).join('\n').slice(0, 4000);
+                    const planningPrompt = buildNarrativePlanningPrompt(
+                      extractedFiguresRef.current || extractionResult.figures, textSummary, retryMode,
+                    );
+                    const planRequest = {
+                      messages: [{ role: 'user' as const, content: planningPrompt }],
+                      model: selectedModel,
+                      max_tokens: 4096,
+                      system: 'You are a presentation planning assistant. Output ONLY valid JSON with the requested structure. No explanations, no markdown formatting outside the JSON.',
+                      timeout: computeTimeout(currentModel, { deepThinking, hasPdf: true, search: false, presentation: false }),
+                      options: { thinking: deepThinking, thinkingBudget: deepThinking ? 10000 : undefined },
+                    };
+                    const planResult = await callChat(planRequest, apiKey, controller.signal);
+                    const { narrative_arc, paper_summary } = parseNarrativePlanResponse(planResult.content);
+                    console.log(`[Planning] Pass 1b (retry): ${narrative_arc.length} planned slides (mode: ${retryMode})`);
+
+                    if (narrative_arc.length > 0) {
+                      retryPlan = {
+                        mode: retryMode,
+                        narrative_arc,
+                        paper_summary,
+                        figures: extractedFiguresRef.current || [],
+                        userText: text,
+                      };
+                    }
+                  }
+
+                  // Author/JournalClub: surface plan and wait
+                  if (retryMode !== 'general' && retryPlan && retryPlan.narrative_arc.length > 0) {
+                    const planText = formatPlanForChat(
+                      retryPlan.narrative_arc, retryPlan.paper_summary, retryPlan.figures, retryPlan.mode,
+                    );
+                    const planMsg: Message = { id: Date.now() + 2, sender: 'sage', text: planText };
+                    setMessages(prev => [...prev.filter(m => !m.isThinking), planMsg]);
+                    setPendingPlan(retryPlan);
+                    pendingPlanRef.current = retryPlan;
+
+                    // Save conversation (retry plan surface)
+                    const msgsToSave = [...newMessages.filter(m => !m.isThinking), planMsg];
+                    await sessions.saveSession(
+                      msgsToSave, sessions.currentSessionId || undefined,
+                      uploadedFiles, null, pdf.pdfPage, pdf.pdfZoom, null, selectedModel,
+                    );
+
+                    setIsLoading(false);
+                    setLoadingMsg('');
+                    presInProgressRef.current = false;
+                    return;
                   }
                 } catch {
-                  console.warn('[Extraction] Pass 1 (retry) failed — using thumbnails');
+                  console.warn('[Extraction/Planning] Pass 1 (retry) failed — using thumbnails');
                 }
               }
 
-              setLoadingMsg('Sage is creating your presentation...');
+              setLoadingMsg('Generating slides...');
 
-              // Rebuild with full presentation system prompt
-              systemPrompt = buildSystemPrompt(text, true);
+              // Rebuild with full presentation system prompt (pass plan for General mode)
+              systemPrompt = buildSystemPrompt(text, true, retryPlan);
               apiMessages = buildApiMessages(text, true);
               maxTokens = maxOutputTokens;
 
@@ -1056,7 +1548,9 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
         if (controller.signal.aborted) throw streamError;
         console.warn('Streaming failed, falling back to non-streaming:', streamError);
         setLoadingMsg(presIntent ? 'Sage is creating your presentation...' : 'Sage is composing a response...');
-        response = await callChat(chatRequest, apiKey, controller.signal);
+        const fallbackResult = await callChat(chatRequest, apiKey, controller.signal);
+        response = fallbackResult.content;
+        if (fallbackResult.usage) { currentTokenUsage = fallbackResult.usage; setLastTokenUsage(fallbackResult.usage); }
       }
 
       // Check if cancelled
@@ -1414,6 +1908,9 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
       // where old messages/state would overwrite the current session data.
       await sessions.loadSession(session, sessionCallbacks());
       setActiveTab('chat'); // Always return to chat tab on session switch
+      // Clear any pending plan from the previous session
+      setPendingPlan(null);
+      pendingPlanRef.current = null;
     },
     [sessions, sessionCallbacks],
   );
@@ -1427,6 +1924,9 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     () => {
       sessions.newSession(sessionCallbacks());
       setActiveTab('chat'); // Switch back to chat tab
+      // Clear any pending plan
+      setPendingPlan(null);
+      pendingPlanRef.current = null;
     },
     [sessions, sessionCallbacks],
   );
@@ -1489,6 +1989,8 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     modelsLoading,
     maxOutputTokens,
     setMaxOutputTokens,
+    extractionModel,
+    setExtractionModel,
     lastTokenUsage,
 
     // ── TTS (flattened from useTTS) ──

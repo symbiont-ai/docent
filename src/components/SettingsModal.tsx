@@ -23,7 +23,16 @@ interface SettingsModalProps {
   maxOutputTokens: number;
   setMaxOutputTokens: (v: number) => void;
   modelMaxTokens: number;
+  extractionModel: string;
+  setExtractionModel: (v: string) => void;
 }
+
+const EXTRACTION_MODELS = [
+  { id: 'google/gemini-2.5-flash', label: 'Gemini Flash', desc: '$0.15/M · recommended' },
+  { id: 'anthropic/claude-haiku-4-20250506', label: 'Claude Haiku 4', desc: '$0.80/M · reasoning' },
+  { id: 'openai/gpt-4o', label: 'GPT-4o', desc: '$2.50/M · accurate' },
+  { id: 'openrouter/free', label: 'Free Router', desc: 'Free · unreliable' },
+];
 
 /** Build preset buttons dynamically based on the model's max completion tokens */
 function buildTokenPresets(cap: number): { value: number; label: string }[] {
@@ -72,6 +81,8 @@ export default function SettingsModal({
   maxOutputTokens,
   setMaxOutputTokens,
   modelMaxTokens,
+  extractionModel,
+  setExtractionModel,
 }: SettingsModalProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGoogleKey, setShowGoogleKey] = useState(false);
@@ -326,6 +337,43 @@ export default function SettingsModal({
           }}>
             <span>4K (less credits needed)</span>
             <span>{Math.round(modelMaxTokens / 1000)}K (longer output)</span>
+          </div>
+        </div>
+
+        {/* Figure Extraction Model */}
+        <div style={{ marginBottom: '20px' }}>
+          <label style={{
+            fontSize: '13px', color: COLORS.textMuted, display: 'block',
+            marginBottom: '4px', fontFamily: 'system-ui, sans-serif',
+          }}>
+            Figure Extraction Model
+          </label>
+          <span style={{
+            fontSize: '11px', color: COLORS.textDim, display: 'block',
+            marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
+          }}>
+            Vision model for locating figures &amp; tables in PDFs
+          </span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {EXTRACTION_MODELS.map(m => (
+              <button
+                key={m.id}
+                onClick={() => setExtractionModel(m.id)}
+                style={{
+                  flex: '1 1 calc(50% - 4px)', minWidth: '140px',
+                  padding: '10px', borderRadius: '8px', cursor: 'pointer',
+                  border: `1px solid ${extractionModel === m.id ? COLORS.accent : COLORS.border}`,
+                  backgroundColor: extractionModel === m.id ? COLORS.accentBg : 'transparent',
+                  color: extractionModel === m.id ? COLORS.accent : COLORS.textMuted,
+                  fontSize: '13px', fontWeight: 500,
+                  fontFamily: 'system-ui, sans-serif',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px',
+                }}
+              >
+                <span>{m.label}</span>
+                <span style={{ fontSize: '10px', opacity: 0.7 }}>{m.desc}</span>
+              </button>
+            ))}
           </div>
         </div>
 

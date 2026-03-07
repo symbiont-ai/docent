@@ -62,6 +62,28 @@ export interface ExtractionResult {
   supplementaryStartPage?: number;    // First page of supplementary material (if detected)
 }
 
+// ── Presentation modes ─────────────────────────────────────
+
+/** Presentation generation mode — determines narrative stance and plan visibility. */
+export type PresentationMode = 'general' | 'author' | 'journal_club';
+
+/** A single entry in the narrative arc (slide plan from Pass 1). */
+export interface NarrativeArcEntry {
+  slide_number: number;
+  title: string;
+  element_ids: string[];   // refs to ExtractedFigure.id (e.g. "ef_1")
+  purpose: string;         // one-line description of what this slide accomplishes
+}
+
+/** Pending presentation plan — bridges Pass 1 and Pass 2 for Author/Journal Club modes. */
+export interface PresentationPlan {
+  mode: PresentationMode;
+  narrative_arc: NarrativeArcEntry[];
+  paper_summary: string;
+  figures: ExtractedFigure[];  // cropped figures from Pass 1
+  userText: string;            // original user request (needed for Pass 2)
+}
+
 export type SlideLayout = 'figure_only' | 'figure_focus' | 'balanced' | 'text_only';
 
 export interface Slide {

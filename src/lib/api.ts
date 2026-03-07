@@ -28,6 +28,13 @@ export interface TokenUsage {
 export interface ChatResponse {
   content: string;
   error?: string;
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
+/** Return type for non-streaming callChat */
+export interface ChatResult {
+  content: string;
+  usage?: TokenUsage;
 }
 
 export interface StreamResult {
@@ -36,12 +43,12 @@ export interface StreamResult {
   finishReason?: string;  // 'stop' | 'length' | 'content_filter'
 }
 
-/** Non-streaming: waits for full response, returns complete text */
+/** Non-streaming: waits for full response, returns content + usage */
 export async function callChat(
   request: ChatRequest,
   apiKey: string,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<ChatResult> {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: {
@@ -59,7 +66,14 @@ export async function callChat(
 
   const data: ChatResponse = await response.json();
   if (data.error) throw new Error(data.error);
-  return data.content || 'No response received.';
+  return {
+    content: data.content || 'No response received.',
+    usage: data.usage ? {
+      prompt_tokens: data.usage.prompt_tokens || 0,
+      completion_tokens: data.usage.completion_tokens || 0,
+      total_tokens: data.usage.total_tokens || 0,
+    } : undefined,
+  };
 }
 
 /**

@@ -158,7 +158,7 @@ export async function POST(request: NextRequest) {
 
     const content = choice.message?.content || '';
 
-    return NextResponse.json({ content });
+    return NextResponse.json({ content, usage: data.usage || null });
   } catch (error) {
     console.error('[API] Route error:', error);
     return NextResponse.json(

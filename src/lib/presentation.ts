@@ -18,7 +18,7 @@ export const decodeEntities = (text: string | undefined): string => {
 
 export const isPresentationIntent = (text: string, messages?: Message[]): boolean => {
   const lower = text.toLowerCase();
-  const createKeywords = ['presentation', ' present ', 'deck', 'prepare a talk', 'make a talk', 'give a talk', 'lecture on', 'lecture about'];
+  const createKeywords = ['presentation', ' present ', 'deck', 'prepare a talk', 'make a talk', 'give a talk', 'lecture on', 'lecture about', 'journal club', 'critique this paper', 'critical review'];
   const slideCreation = /\b(make|create|build|prepare|generate|give me|add)\b.*\bslides?\b|\bslides?\b.*\b(about|on the topic|for|presentation)\b|\b\d+\s*(content\s+)?slides?\b/i;
   if (createKeywords.some(k => lower.includes(k)) || /^present\s/i.test(text.trim()) || slideCreation.test(text)) return true;
   if (messages && messages.length >= 2) {

@@ -9,6 +9,7 @@ import { useState, useRef, useCallback, useEffect, type MutableRefObject } from 
 import type { PresentationState, PresentationData, Slide, ImageCatalogEntry, ExtractedFigure } from '@/src/types';
 import { decodeEntities, resolveImageRefs } from '@/src/lib/presentation';
 import { resolveRegion } from '@/src/lib/pdf-utils';
+import { sanitizeSvg } from '@/src/lib/svg-repair';
 
 const INITIAL_STATE: PresentationState = {
   slides: [],
@@ -56,6 +57,10 @@ export function usePresentation(
             label: slide.figure.label ? decodeEntities(slide.figure.label) : undefined,
             description: slide.figure.description ? decodeEntities(slide.figure.description) : undefined,
             caption: slide.figure.caption ? decodeEntities(slide.figure.caption) : undefined,
+            // Sanitize SVG content for common weak-model issues (viewBox, font-size, xmlns)
+            content: slide.figure.type === 'svg' && slide.figure.content
+              ? sanitizeSvg(slide.figure.content)
+              : slide.figure.content,
           }
         : undefined,
     };
