@@ -804,7 +804,7 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
         // Append a strong reminder as a separate user message
         apiMessages.push({
           role: 'user' as const,
-          content: `⚠️ CRITICAL: The user asked for EXACTLY ${n} content slides. Your JSON array must have EXACTLY ${n + 3} slides total (1 title + ${n} content + 1 references + 1 closing). Do NOT generate more or fewer than ${n} content slides. If you find yourself exceeding ${n}, STOP and remove the extra content slides before outputting.`,
+          content: `⚠️ CRITICAL: The user asked for EXACTLY ${n} content slides. Your JSON array must have EXACTLY ${n + 4} slides total (1 title + 1 overview + ${n} content + 1 references + 1 closing). Do NOT generate more or fewer than ${n} content slides. If you find yourself exceeding ${n}, STOP and remove the extra content slides before outputting.`,
         });
       }
     }
@@ -1113,7 +1113,7 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
           const modelCap = currentModel?.maxCompletionTokens || 32000;
           const slideCountGuess = plan.userText.match(/(\d+)\s*(?:slides?|slayt)/i);
           const slides = slideCountGuess ? parseInt(slideCountGuess[1], 10) : plan.narrative_arc.length || 8;
-          const maxTokens = Math.min((slides + 3) * 4000 + 2000, modelCap);
+          const maxTokens = Math.min((slides + 4) * 4000 + 2000, modelCap);
           const requestTimeout = computeTimeout(currentModel, {
             deepThinking: false,
             hasPdf: true,
@@ -1478,7 +1478,7 @@ Only modify what the user requested. Maintain reasonable slide count (8-12).`;
         // ~4K tokens per slide (content + SVG + notes + refs) + 2K overhead
         const slideCountGuess = text.match(/(\d+)\s*(?:slides?|slayt)/i);
         const slides = slideCountGuess ? parseInt(slideCountGuess[1], 10) : 8;
-        const presMinTokens = Math.min((slides + 3) * 4000 + 2000, modelCap);
+        const presMinTokens = Math.min((slides + 4) * 4000 + 2000, modelCap);
         if (maxTokens < presMinTokens) {
           console.log(`[Pres] Auto-boosting max_tokens from ${maxTokens} to ${presMinTokens} (${slides} slides estimated, model cap ${modelCap})`);
           maxTokens = presMinTokens;
@@ -1723,7 +1723,7 @@ Only modify what the user requested. Maintain reasonable slide count (8-12).`;
                 const modelCap = currentModel?.maxCompletionTokens || 32000;
                 const slideCountGuess = text.match(/(\d+)\s*(?:slides?|slayt)/i);
                 const slides = slideCountGuess ? parseInt(slideCountGuess[1], 10) : 8;
-                const presMinTokens = Math.min((slides + 3) * 4000 + 2000, modelCap);
+                const presMinTokens = Math.min((slides + 4) * 4000 + 2000, modelCap);
                 if (maxTokens < presMinTokens) {
                   console.log(`[Pres/Retry] Auto-boosting max_tokens from ${maxTokens} to ${presMinTokens}`);
                   maxTokens = presMinTokens;
@@ -1870,6 +1870,7 @@ Only modify what the user requested. Maintain reasonable slide count (8-12).`;
           pdfTotalPages: pdf.pdfTotalPages,
           cropFn: pdf.cropPdfFigure,
           extractedFigures: extractedFiguresRef.current || undefined,
+          mode: detectedMode,
         });
 
         // Restore slide position if user navigated during streaming

@@ -6,7 +6,7 @@
 // ==========================================================
 
 import { useState, useRef, useCallback, useEffect, type MutableRefObject } from 'react';
-import type { PresentationState, PresentationData, Slide, ImageCatalogEntry, ExtractedFigure } from '@/src/types';
+import type { PresentationState, PresentationData, Slide, ImageCatalogEntry, ExtractedFigure, PresentationMode } from '@/src/types';
 import { decodeEntities, resolveImageRefs } from '@/src/lib/presentation';
 import { resolveRegion } from '@/src/lib/pdf-utils';
 import { sanitizeSvg } from '@/src/lib/svg-repair';
@@ -27,6 +27,8 @@ export interface LoadPresentationOptions {
   pdfTotalPages?: number;
   cropFn?: (pageNum: number, region: number[] | string | undefined, doc?: unknown) => Promise<string | null>;
   extractedFigures?: ExtractedFigure[];
+  /** Presentation mode — skip title page injection for 'author' mode */
+  mode?: PresentationMode;
 }
 
 export function usePresentation(
@@ -74,7 +76,7 @@ export function usePresentation(
     data: PresentationData,
     opts?: LoadPresentationOptions,
   ): Promise<void> => {
-    const { pdfDoc, pdfTotalPages, cropFn, extractedFigures } = opts || {};
+    const { pdfDoc, pdfTotalPages, cropFn, extractedFigures, mode } = opts || {};
 
     // 1. Decode HTML entities in all slides
     let slides = data.slides.map(decodeSlide);
@@ -102,7 +104,8 @@ export function usePresentation(
 
     // 4. Auto-inject PDF title page snapshot on the first (title) slide
     // Only store metadata — SlideRenderer lazily crops via cropFn
-    if (pdfDoc && pdfTotalPages && pdfTotalPages > 0 && slides.length > 0) {
+    // Skip for Author mode — the author wouldn't display their own paper as a figure
+    if (pdfDoc && pdfTotalPages && pdfTotalPages > 0 && slides.length > 0 && mode !== 'author') {
       const titleSlide = slides[0];
       // Inject if: no figure, text_only layout, or model generated a decorative SVG (PDF crop takes priority)
       if (!titleSlide.figure || titleSlide.layout === 'text_only' ||

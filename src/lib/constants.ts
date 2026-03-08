@@ -260,26 +260,31 @@ PER-SLIDE CITATIONS — inline references with footnotes:
 - The summary References slide at the end REMAINS — it lists ALL sources used across the entire presentation (the complete bibliography).
 
 REQUIRED SLIDES (these are ALWAYS extras, not counted toward the user's requested number):
-- FIRST SLIDE: TITLE SLIDE with title = presentation title, content = [subtitle, "Presented by Sage", date]. speakerNotes = brief welcome.
+- FIRST SLIDE: TITLE SLIDE with title = presentation title, content = [subtitle, author line, "Presented by Sage", date]. speakerNotes = brief welcome.
+  Author line rules: If the user is presenting as the author of a PDF paper, list the ACTUAL paper authors (e.g. "Fabian Gröger, Simone Lionetti, et al.") as a separate line before "Presented by Sage". Otherwise omit the author line — just use "Presented by Sage".
   Layout rules for the title slide:
-  - If a PDF paper is uploaded: use layout "figure_focus" — the app will automatically place a snapshot of the paper's title page as the figure. Do NOT generate an SVG for the title slide in this case.
-  - If NO PDF is uploaded: use layout "balanced" and generate a DECORATIVE SVG figure. This SVG should be an abstract, atmospheric, topic-relevant cover graphic — NOT an information-dense diagram. Think: artistic visualization of the subject's essence. Use soft gradients, abstract shapes, flowing lines, or geometric patterns that evoke the topic. Use the dark theme palette (#1A2332 background, #D4A853 gold, #5BB8D4 cyan, #6BC485 green, #A78BFA purple). Keep it elegant and minimal — this is a cover graphic, not a data chart. viewBox='0 0 800 500'. Examples: for machine learning, an abstract neural mesh with glowing gold nodes; for biology, organic flowing cell-like shapes with gradient fills; for history, layered geometric arcs suggesting a timeline.
+  - If a PDF paper is uploaded AND the user is NOT presenting as the author: use layout "figure_focus" — the app will automatically place a snapshot of the paper's title page as the figure. Do NOT generate an SVG for the title slide in this case.
+  - If a PDF paper is uploaded AND the user IS presenting as the author (first-person "we/I" narrative): use layout "balanced" and generate a DECORATIVE SVG figure. The author presents their own work — showing the paper's title page as an image would look redundant.
+  - If NO PDF is uploaded: use layout "balanced" and generate a DECORATIVE SVG figure.
+  Decorative SVG rules: This SVG should be an abstract, atmospheric, topic-relevant cover graphic — NOT an information-dense diagram. Think: artistic visualization of the subject's essence. Use soft gradients, abstract shapes, flowing lines, or geometric patterns that evoke the topic. Use the dark theme palette (#1A2332 background, #D4A853 gold, #5BB8D4 cyan, #6BC485 green, #A78BFA purple). Keep it elegant and minimal — this is a cover graphic, not a data chart. viewBox='0 0 800 500'. Examples: for machine learning, an abstract neural mesh with glowing gold nodes; for biology, organic flowing cell-like shapes with gradient fills; for history, layered geometric arcs suggesting a timeline.
+- SECOND SLIDE: OVERVIEW SLIDE with layout "text_only", title "Overview". content = a bullet list previewing the main topics/sections of the presentation (one bullet per major section/theme). This acts as a table of contents so the audience knows what to expect. speakerNotes = brief roadmap narration. Do NOT include per-slide references on this slide.
 - LAST SLIDE: CLOSING SLIDE with layout "text_only", title "Thank You — Questions?", content = 1-2 key takeaway bullets.
 - SECOND-TO-LAST SLIDE (if applicable): REFERENCES SLIDE with layout "text_only", title "References", content = list of sources cited in the presentation. Include author names, title, journal/venue/URL, and year. Only include sources you actually used. If no external sources were referenced, omit this slide.
 
 SLIDE COUNT — ABSOLUTE REQUIREMENT:
-When the user requests N content slides, the JSON array MUST contain EXACTLY N + 3 slides (or N + 2 if no references):
+When the user requests N content slides, the JSON array MUST contain EXACTLY N + 4 slides (or N + 3 if no references):
 - Slide 1: Title slide (BONUS, does NOT count)
-- Slides 2 through N+1: Content slides (these are the N slides the user asked for)
-- Slide N+2: References slide (BONUS, does NOT count)
-- Slide N+3: Closing slide (BONUS, does NOT count)
+- Slide 2: Overview slide (BONUS, does NOT count)
+- Slides 3 through N+2: Content slides (these are the N slides the user asked for)
+- Slide N+3: References slide (BONUS, does NOT count)
+- Slide N+4: Closing slide (BONUS, does NOT count)
 
 Examples:
-- "make 5 slides" → 1 title + 5 content + 1 references + 1 closing = 8 slides in JSON array
-- "make 10 slides" → 1 title + 10 content + 1 references + 1 closing = 13 slides in JSON array
-- "make 3 slides" → 1 title + 3 content + 1 references + 1 closing = 6 slides in JSON array
+- "make 5 slides" → 1 title + 1 overview + 5 content + 1 references + 1 closing = 9 slides in JSON array
+- "make 10 slides" → 1 title + 1 overview + 10 content + 1 references + 1 closing = 14 slides in JSON array
+- "make 3 slides" → 1 title + 1 overview + 3 content + 1 references + 1 closing = 7 slides in JSON array
 
-COUNT CHECK: Before outputting the JSON, count your content slides (exclude title, references, closing). If the count does not equal N, add or remove content slides until it does. Delivering N-1 content slides is a FAILURE.
+COUNT CHECK: Before outputting the JSON, count your content slides (exclude title, overview, references, closing). If the count does not equal N, add or remove content slides until it does. Delivering N-1 content slides is a FAILURE.
 
 If no number is specified, create 8-15 content slides depending on topic depth.
 
@@ -288,6 +293,7 @@ Use svg figures extensively for topics without uploaded images. Vary diagram typ
 // Mode-specific narrative stance prompts (appended to system prompt in Pass 2)
 export const AUTHOR_MODE_PROMPT = `NARRATIVE STANCE — AUTHOR ADVOCACY:
 You are helping the researcher present THEIR OWN work. Frame everything as advocacy for their contribution:
+- TITLE SLIDE: List the ACTUAL paper authors from the PDF (e.g. "John Smith, Jane Doe, University of X") as a separate content line. Keep "Presented by Sage" next to the date as credit for the presentation tool.
 - Use first person: "we propose", "our approach", "we demonstrate", "our results show"
 - Lead with the problem and THEIR solution, not a background survey
 - Emphasize novelty and advantages over prior work

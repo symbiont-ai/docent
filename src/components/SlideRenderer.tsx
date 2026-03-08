@@ -5,11 +5,11 @@ import { COLORS } from '@/src/lib/colors';
 import { decodeEntities } from '@/src/lib/presentation';
 import type { Slide, Figure } from '@/src/types';
 
-// Build a Google Scholar search URL from a reference string
-const buildScholarUrl = (refText: string): string => {
+// Build a Google search URL from a reference string
+const buildSearchUrl = (refText: string): string => {
   // Strip citation numbers like [1], [2] from start
   const clean = refText.replace(/^\[\d+\]\s*/, '').trim();
-  return `https://scholar.google.com/scholar?q=${encodeURIComponent(clean)}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(clean)}`;
 };
 
 // Detect if a bullet is a reference-like entry (for the summary References slide)
@@ -639,13 +639,13 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
                   <span style={{ color: COLORS.accent, fontWeight: 700, flexShrink: 0 }}>{'\u203A'}</span>
                   {isRefSlide ? (
                     <a
-                      href={buildScholarUrl(decoded)}
+                      href={buildSearchUrl(decoded)}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ color: 'inherit', textDecoration: 'none' }}
                       onMouseEnter={e => { (e.target as HTMLElement).style.textDecoration = 'underline'; (e.target as HTMLElement).style.color = COLORS.cyan; }}
                       onMouseLeave={e => { (e.target as HTMLElement).style.textDecoration = 'none'; (e.target as HTMLElement).style.color = 'inherit'; }}
-                      title="Search on Google Scholar"
+                      title="Search on Google"
                     >
                       {decoded}
                     </a>
@@ -683,13 +683,13 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
                       [{i + 1}]
                     </span>
                     <a
-                      href={buildScholarUrl(ref)}
+                      href={buildSearchUrl(ref)}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ color: 'inherit', textDecoration: 'none' }}
                       onMouseEnter={e => { (e.target as HTMLElement).style.textDecoration = 'underline'; }}
                       onMouseLeave={e => { (e.target as HTMLElement).style.textDecoration = 'none'; }}
-                      title="Search on Google Scholar"
+                      title="Search on Google"
                     >
                       {ref}
                     </a>
