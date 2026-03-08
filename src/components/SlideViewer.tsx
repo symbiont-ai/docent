@@ -19,6 +19,7 @@ interface SlideViewerProps {
   onToggleAutoAdvance: () => void;
   onToggleNotes: () => void;
   onAskAboutSlides: () => void;
+  onAssessMe?: () => void;
   onShowPromptEditor?: (mode: 'generate' | 'search') => void;
   onRevertFigure?: () => void;
   onUpdateSpeakerNotes?: (notes: string) => void;
@@ -45,6 +46,7 @@ export default function SlideViewer({
   onToggleAutoAdvance,
   onToggleNotes,
   onAskAboutSlides,
+  onAssessMe,
   onShowPromptEditor,
   onRevertFigure,
   onUpdateSpeakerNotes,
@@ -372,6 +374,25 @@ export default function SlideViewer({
         >
           {'\uD83D\uDCAC'} Ask
         </button>
+
+        {/* Assess Me button */}
+        {onAssessMe && (
+          <button
+            onClick={onAssessMe}
+            disabled={!!isStreamingSlides}
+            style={{
+              padding: '6px 14px', fontSize: '13px', borderRadius: '6px',
+              cursor: isStreamingSlides ? 'not-allowed' : 'pointer',
+              fontFamily: 'system-ui, sans-serif',
+              backgroundColor: 'transparent',
+              border: `1px solid ${COLORS.accent}`, color: COLORS.accent,
+              ...(isStreamingSlides ? { opacity: 0.4 } : {}),
+            }}
+            title="Start a Socratic assessment on this presentation"
+          >
+            {'\uD83C\uDF93'} Assess Me
+          </button>
+        )}
       </div>
     </div>
   );

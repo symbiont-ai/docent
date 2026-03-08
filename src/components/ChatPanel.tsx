@@ -3,7 +3,7 @@
 import React from 'react';
 import { COLORS } from '@/src/lib/colors';
 import MessageBubble from './MessageBubble';
-import type { Message, UploadedFile } from '@/src/types';
+import type { Message, UploadedFile, AssessmentPhase } from '@/src/types';
 
 interface ChatPanelProps {
   messages: Message[];
@@ -26,6 +26,10 @@ interface ChatPanelProps {
   autoSearchActive?: boolean;
   /** Display name of the currently selected model */
   selectedModelName?: string;
+  /** Current assessment phase for mode banner */
+  assessmentPhase?: AssessmentPhase;
+  /** Whether a presentation is loaded (for Q&A banner) */
+  hasPresentation?: boolean;
 }
 
 const SUGGESTION_PROMPTS = [
@@ -53,11 +57,34 @@ export default function ChatPanel({
   loadingMsg,
   autoSearchActive,
   selectedModelName,
+  assessmentPhase,
+  hasPresentation,
 }: ChatPanelProps) {
   const effectiveSearch = searchMode || !!autoSearchActive;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Mode banner — pinned above scrollable area */}
+      {messages.length > 0 && hasPresentation && (
+        <div style={{
+          padding: '6px 14px', margin: '8px 20px 0', borderRadius: '8px', display: 'flex',
+          alignItems: 'center', gap: '8px', fontSize: '12px',
+          fontFamily: 'system-ui, sans-serif', flexShrink: 0,
+          ...(assessmentPhase === 'active' || assessmentPhase === 'report'
+            ? { backgroundColor: '#D4A85315', border: `1px solid ${COLORS.accent}40`, color: COLORS.accent }
+            : { backgroundColor: '#5BB8D410', border: `1px solid ${COLORS.cyan}30`, color: COLORS.cyan }
+          ),
+        }}>
+          {assessmentPhase === 'active' ? (
+            <><span style={{ fontSize: '14px' }}>{'\uD83C\uDF93'}</span> <strong>Assessment Mode</strong> — Answer Sage&apos;s questions to check your understanding</>
+          ) : assessmentPhase === 'report' ? (
+            <><span style={{ fontSize: '14px' }}>{'\uD83D\uDCCA'}</span> <strong>Assessment Complete</strong> — Review your results below</>
+          ) : (
+            <><span style={{ fontSize: '14px' }}>{'\uD83D\uDCAC'}</span> <strong>Q&amp;A Mode</strong> — Ask Sage anything about the presentation</>
+          )}
+        </div>
+      )}
+
       {/* Messages area */}
       <div style={{
         flex: 1, overflow: 'auto', padding: '20px',

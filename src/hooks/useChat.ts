@@ -43,6 +43,9 @@ import type {
   NarrativeArcEntry,
   PresentationPlan,
   PresentationMode,
+  AssessmentState,
+  AssessmentQuestion,
+  AssessmentAnswer,
 } from '@/src/types';
 import { callChat, callChatStream } from '@/src/lib/api';
 import type { TokenUsage } from '@/src/lib/api';
@@ -74,6 +77,21 @@ import {
   detectPlanResponse,
   formatPlanForChat,
 } from '@/src/lib/presentation-modes';
+import {
+  isAssessmentIntent,
+  isQuitIntent,
+  createInitialAssessmentState,
+  buildSlideSummaries,
+  buildAssessmentSystemPrompt,
+  buildEvaluationSystemPrompt,
+  parseQuestionResponse,
+  parseEvaluationResponse,
+  selectTier,
+  computeNextTheta,
+  shouldStopAssessment,
+  buildGapReport,
+  buildFullBreakdown,
+} from '@/src/lib/assessment';
 import { useTTS } from './useTTS';
 import { useMemory } from './useMemory';
 import { usePDF } from './usePDF';
@@ -188,6 +206,12 @@ export function useChat() {
   const [pendingPlan, setPendingPlan] = useState<PresentationPlan | null>(null);
   const pendingPlanRef = useRef<PresentationPlan | null>(null);
   useEffect(() => { pendingPlanRef.current = pendingPlan; }, [pendingPlan]);
+
+  // ── Assessment (Socratic) state ────────────────────────
+  const [assessmentState, setAssessmentState] = useState<AssessmentState>(createInitialAssessmentState());
+  const assessmentStateRef = useRef<AssessmentState>(createInitialAssessmentState());
+  useEffect(() => { assessmentStateRef.current = assessmentState; }, [assessmentState]);
+  const postPresQACountRef = useRef(0);
 
   // ── File state ───────────────────────────────────────────
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -807,6 +831,256 @@ RULE: When the user says "slide N", respond about EXACTLY the slide numbered ${r
     setError(null);
     setInput('');
 
+    // ── Assessment mode intercept ─────────────────────────
+    const assessment = assessmentStateRef.current;
+    const presSlides = presentation.presentationRef.current.slides;
+
+    // Quit assessment
+    if (assessment.phase === 'active' && isQuitIntent(text)) {
+      const quitUserMsg: Message = { id: Date.now(), sender: 'user', text };
+      const quitSageMsg: Message = { id: Date.now() + 1, sender: 'sage', text: 'Assessment cancelled. Feel free to ask questions or say **assess me** to try again.' };
+      setMessages(prev => [...prev, quitUserMsg, quitSageMsg]);
+      const resetState = createInitialAssessmentState();
+      resetState.offeredThisPresentation = true; // Don't re-offer
+      setAssessmentState(resetState);
+      assessmentStateRef.current = resetState;
+      return;
+    }
+
+    // Start assessment
+    if (assessment.phase === 'idle' && presSlides.length > 0 && isAssessmentIntent(text)) {
+      const userMsg: Message = { id: Date.now(), sender: 'user', text };
+      setMessages(prev => [...prev, userMsg]);
+      setIsLoading(true);
+      setLoadingMsg('Preparing assessment...');
+
+      const newState: AssessmentState = {
+        ...createInitialAssessmentState(),
+        phase: 'active',
+        offeredThisPresentation: true,
+      };
+      setAssessmentState(newState);
+      assessmentStateRef.current = newState;
+
+      try {
+        const slideSummaries = buildSlideSummaries(presSlides);
+        const tier = selectTier(newState.theta);
+        const systemPrompt = buildAssessmentSystemPrompt(slideSummaries, newState, tier);
+
+        const { content: qRaw } = await callChat({
+          messages: [{ role: 'user', content: 'Begin the assessment. Ask me your first question.' }],
+          model: selectedModel,
+          max_tokens: 1024,
+          system: systemPrompt,
+        }, apiKey);
+
+        const parsed = parseQuestionResponse(qRaw);
+        if (!parsed) throw new Error('Failed to parse question from model response');
+
+        const question: AssessmentQuestion = {
+          questionNumber: 1,
+          tier,
+          question: parsed.question,
+          slideContext: parsed.slideContext,
+        };
+
+        const updatedState: AssessmentState = {
+          ...newState,
+          currentQuestionNumber: 1,
+          questions: [question],
+        };
+        setAssessmentState(updatedState);
+        assessmentStateRef.current = updatedState;
+
+        const sageMsg: Message = {
+          id: Date.now() + 1,
+          sender: 'sage',
+          text: `**Question 1** (Tier ${tier})\n\n${parsed.question}`,
+        };
+        setMessages(prev => [...prev, sageMsg]);
+
+        // Save session
+        await sessions.saveSession(
+          [...messages, userMsg, sageMsg], sessions.currentSessionId || undefined,
+          uploadedFiles,
+          presSlides.length > 0 ? presentation.presentationRef.current : null,
+          pdf.pdfPage, pdf.pdfZoom, lastTokenUsage, selectedModel,
+        );
+      } catch (err) {
+        console.error('[Assessment] Failed to start:', err);
+        setError('Failed to start assessment. Please try again.');
+        setAssessmentState(createInitialAssessmentState());
+        assessmentStateRef.current = createInitialAssessmentState();
+      } finally {
+        setIsLoading(false);
+        setLoadingMsg('');
+      }
+      return;
+    }
+
+    // Active assessment: evaluate answer + ask next question (or report)
+    if (assessment.phase === 'active') {
+      const userMsg: Message = { id: Date.now(), sender: 'user', text };
+      setMessages(prev => [...prev, userMsg]);
+      setIsLoading(true);
+      setLoadingMsg('Evaluating your answer...');
+
+      try {
+        const slideSummaries = buildSlideSummaries(presSlides);
+        const currentQ = assessment.questions[assessment.questions.length - 1];
+
+        // Evaluate the answer
+        const evalPrompt = buildEvaluationSystemPrompt(slideSummaries, currentQ, text);
+        const { content: evalRaw } = await callChat({
+          messages: [{ role: 'user', content: text }],
+          model: selectedModel,
+          max_tokens: 1024,
+          system: evalPrompt,
+        }, apiKey);
+
+        const evalResult = parseEvaluationResponse(evalRaw);
+        if (!evalResult) throw new Error('Failed to parse evaluation from model response');
+
+        const answer: AssessmentAnswer = {
+          questionNumber: currentQ.questionNumber,
+          userAnswer: text,
+          score: evalResult.score,
+          acknowledgment: evalResult.acknowledgment,
+          tier: currentQ.tier,
+          slideContext: currentQ.slideContext,
+        };
+
+        // Update theta and streak counters
+        const newTheta = computeNextTheta(assessment.theta, evalResult.score);
+        const consT3 = evalResult.score === 1 && currentQ.tier === 3
+          ? assessment.consecutiveT3Correct + 1 : (currentQ.tier === 3 ? 0 : assessment.consecutiveT3Correct);
+        const consT1 = evalResult.score === 0 && currentQ.tier === 1
+          ? assessment.consecutiveT1Incorrect + 1 : (currentQ.tier === 1 ? 0 : assessment.consecutiveT1Incorrect);
+
+        const updatedState: AssessmentState = {
+          ...assessment,
+          theta: newTheta,
+          answers: [...assessment.answers, answer],
+          consecutiveT3Correct: consT3,
+          consecutiveT1Incorrect: consT1,
+        };
+
+        const scoreIcon = evalResult.score === 1 ? '\u2705' : evalResult.score === 0.5 ? '\u26A0\uFE0F' : '\u274C';
+        let sageText = `${scoreIcon} ${evalResult.acknowledgment}`;
+
+        // Check stop condition
+        if (shouldStopAssessment(updatedState)) {
+          updatedState.phase = 'report';
+          const report = buildGapReport(updatedState);
+          sageText += `\n\n${report}`;
+        } else {
+          // Ask next question
+          const nextTier = selectTier(newTheta);
+          const nextQNum = assessment.currentQuestionNumber + 1;
+
+          setLoadingMsg('Preparing next question...');
+          const qPrompt = buildAssessmentSystemPrompt(slideSummaries, updatedState, nextTier);
+          const { content: qRaw } = await callChat({
+            messages: [{ role: 'user', content: 'Next question.' }],
+            model: selectedModel,
+            max_tokens: 1024,
+            system: qPrompt,
+          }, apiKey);
+
+          const parsed = parseQuestionResponse(qRaw);
+          if (!parsed) throw new Error('Failed to parse next question');
+
+          const nextQ: AssessmentQuestion = {
+            questionNumber: nextQNum,
+            tier: nextTier,
+            question: parsed.question,
+            slideContext: parsed.slideContext,
+          };
+
+          updatedState.currentQuestionNumber = nextQNum;
+          updatedState.questions = [...updatedState.questions, nextQ];
+
+          sageText += `\n\n---\n\n**Question ${nextQNum}** (Tier ${nextTier})\n\n${parsed.question}`;
+        }
+
+        setAssessmentState(updatedState);
+        assessmentStateRef.current = updatedState;
+
+        const sageMsg: Message = { id: Date.now() + 1, sender: 'sage', text: sageText };
+        setMessages(prev => [...prev, sageMsg]);
+
+        // Save session
+        await sessions.saveSession(
+          [...messages, userMsg, sageMsg], sessions.currentSessionId || undefined,
+          uploadedFiles,
+          presSlides.length > 0 ? presentation.presentationRef.current : null,
+          pdf.pdfPage, pdf.pdfZoom, lastTokenUsage, selectedModel,
+        );
+      } catch (err) {
+        console.error('[Assessment] Evaluation failed:', err);
+        setError('Failed to evaluate answer. Please try again.');
+      } finally {
+        setIsLoading(false);
+        setLoadingMsg('');
+      }
+      return;
+    }
+
+    // Assessment report: handle follow-up options (1=breakdown, 2=re-explain, 3=retry)
+    if (assessment.phase === 'report') {
+      const userMsg: Message = { id: Date.now(), sender: 'user', text };
+      setMessages(prev => [...prev, userMsg]);
+
+      const lower = text.toLowerCase().trim();
+      if (lower === '1' || /full\s*breakdown/i.test(lower) || /detail/i.test(lower)) {
+        const breakdown = buildFullBreakdown(assessment);
+        const sageMsg: Message = { id: Date.now() + 1, sender: 'sage', text: breakdown };
+        setMessages(prev => [...prev, sageMsg]);
+        // Stay in report phase — user can still pick option 2 or 3
+        return;
+      }
+
+      if (lower === '3' || /try\s*again|retake|retry/i.test(lower)) {
+        // Reset and restart assessment
+        const resetState = createInitialAssessmentState();
+        resetState.offeredThisPresentation = true;
+        setAssessmentState(resetState);
+        assessmentStateRef.current = resetState;
+        // Trigger assessment via recursive call
+        handleSend('assess me');
+        return;
+      }
+
+      if (lower === '2' || /re-?explain|teach/i.test(lower)) {
+        // Exit assessment mode, let normal Q&A handle re-explanation
+        const resetState = createInitialAssessmentState();
+        resetState.offeredThisPresentation = true;
+        setAssessmentState(resetState);
+        assessmentStateRef.current = resetState;
+        // Build a re-explain prompt from weak concepts
+        const weakConcepts = [...new Set(
+          assessment.answers.filter(a => a.score === 0).map(a => a.slideContext)
+        )];
+        if (weakConcepts.length > 0) {
+          // Fall through to normal chat with a re-explain request
+          const reExplainText = `Please re-explain these concepts in a different way: ${weakConcepts.join(', ')}`;
+          handleSend(reExplainText);
+          return;
+        }
+        // No weak concepts — just exit
+        const sageMsg: Message = { id: Date.now() + 1, sender: 'sage', text: 'Great job! You had no weak areas to review. Feel free to ask any other questions.' };
+        setMessages(prev => [...prev, sageMsg]);
+        return;
+      }
+
+      // Unrecognized input — exit report mode, fall through to normal chat
+      const resetState = createInitialAssessmentState();
+      resetState.offeredThisPresentation = true;
+      setAssessmentState(resetState);
+      assessmentStateRef.current = resetState;
+      // Don't return — let the message flow to normal chat handling below
+    }
+
     // ── Pending plan check (Author / Journal Club modes) ──
     // If a plan is waiting for user confirmation, handle it before normal flow.
     const plan = pendingPlanRef.current;
@@ -1019,7 +1293,7 @@ Only modify what the user requested. Maintain reasonable slide count (8-12).`;
 
     // Only treat as presentation intent if the *current* message asks for one.
     // Checking history caused follow-up questions to show "creating presentation..." loading.
-    let presIntent = isPresentationIntent(text);
+    let presIntent = isPresentationIntent(text) && assessmentStateRef.current.phase === 'idle';
     presInProgressRef.current = presIntent;
 
     // Auto-enable search for topic presentations (no PDF) and reflect it in the UI
@@ -1666,6 +1940,24 @@ Only modify what the user requested. Maintain reasonable slide count (8-12).`;
       if (autoVoice && !presResult) {
         tts.speak(responseText, undefined, detectedLang);
       }
+
+      // 10. Auto-offer assessment after 2+ Q&A messages post-presentation
+      if (!presResult && presentation.presentationRef.current.slides.length > 0) {
+        const currentAssessment = assessmentStateRef.current;
+        if (!currentAssessment.offeredThisPresentation && currentAssessment.phase === 'idle') {
+          postPresQACountRef.current++;
+          if (postPresQACountRef.current >= 2) {
+            const offerMsg: Message = {
+              id: Date.now() + 3,
+              sender: 'system',
+              text: 'Ready to test your understanding? Say **"assess me"** or click the **Assess Me** button to start a Socratic quiz.',
+            };
+            setMessages(prev => [...prev, offerMsg]);
+            setAssessmentState(prev => ({ ...prev, offeredThisPresentation: true }));
+            assessmentStateRef.current = { ...assessmentStateRef.current, offeredThisPresentation: true };
+          }
+        }
+      }
     } catch (e) {
       if (cancelledGens.current.has(gen)) {
         cancelledGens.current.delete(gen);
@@ -1911,6 +2203,10 @@ Only modify what the user requested. Maintain reasonable slide count (8-12).`;
       // Clear any pending plan from the previous session
       setPendingPlan(null);
       pendingPlanRef.current = null;
+      // Reset assessment state
+      setAssessmentState(createInitialAssessmentState());
+      assessmentStateRef.current = createInitialAssessmentState();
+      postPresQACountRef.current = 0;
     },
     [sessions, sessionCallbacks],
   );
@@ -1927,6 +2223,10 @@ Only modify what the user requested. Maintain reasonable slide count (8-12).`;
       // Clear any pending plan
       setPendingPlan(null);
       pendingPlanRef.current = null;
+      // Reset assessment state
+      setAssessmentState(createInitialAssessmentState());
+      assessmentStateRef.current = createInitialAssessmentState();
+      postPresQACountRef.current = 0;
     },
     [sessions, sessionCallbacks],
   );
@@ -1992,6 +2292,10 @@ Only modify what the user requested. Maintain reasonable slide count (8-12).`;
     extractionModel,
     setExtractionModel,
     lastTokenUsage,
+
+    // ── Assessment (Socratic) ──
+    assessmentState,
+    startAssessment: () => handleSend('assess me'),
 
     // ── TTS (flattened from useTTS) ──
     autoVoice,

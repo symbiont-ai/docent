@@ -62,6 +62,46 @@ export interface ExtractionResult {
   supplementaryStartPage?: number;    // First page of supplementary material (if detected)
 }
 
+// ── Assessment (Socratic) ─────────────────────────────────
+
+export type AssessmentTier = 1 | 2 | 3;  // Recall, Application, Synthesis
+export type AssessmentPhase = 'idle' | 'active' | 'report';
+
+export interface AssessmentQuestion {
+  questionNumber: number;
+  tier: AssessmentTier;
+  question: string;
+  slideContext: string;    // slide title / concept being tested
+}
+
+export interface AssessmentAnswer {
+  questionNumber: number;
+  userAnswer: string;
+  score: number;           // 0 | 0.5 | 1.0
+  acknowledgment: string;
+  tier: AssessmentTier;
+  slideContext: string;    // concept that was tested (copied from question)
+}
+
+export interface AssessmentState {
+  phase: AssessmentPhase;
+  theta: number;                    // -1.0 to +1.0, starts 0
+  currentQuestionNumber: number;    // 1-indexed, 0 when idle
+  questions: AssessmentQuestion[];
+  answers: AssessmentAnswer[];
+  consecutiveT3Correct: number;
+  consecutiveT1Incorrect: number;
+  offeredThisPresentation: boolean;
+}
+
+/** Persisted subset of assessment — saved in Session */
+export interface SessionAssessment {
+  theta: number;
+  questions: AssessmentQuestion[];
+  answers: AssessmentAnswer[];
+  completedAt?: string;
+}
+
 // ── Presentation modes ─────────────────────────────────────
 
 /** Presentation generation mode — determines narrative stance and plan visibility. */
@@ -145,6 +185,7 @@ export interface Session {
     zoom: number;
   } | null;
   tokenUsage: SessionTokenUsage | null;
+  assessment: SessionAssessment | null;
   messageCount: number;
   createdAt: string;
   updatedAt: string;

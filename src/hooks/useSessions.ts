@@ -210,6 +210,7 @@ export function useSessions() {
           ? { page: pdfPage, zoom: pdfZoom || 1.0 }
           : null,
         tokenUsage: tokenUsage || null,
+        assessment: null,
         messageCount: msgs.filter(m => !m.isThinking).length,
         createdAt: existingSessionId
           ? (savedSessions.find(s => s.id === sessionId)?.createdAt || now)

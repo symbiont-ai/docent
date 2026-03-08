@@ -5,6 +5,17 @@ import { COLORS } from '@/src/lib/colors';
 import { decodeEntities } from '@/src/lib/presentation';
 import type { Slide, Figure } from '@/src/types';
 
+// Build a Google Scholar search URL from a reference string
+const buildScholarUrl = (refText: string): string => {
+  // Strip citation numbers like [1], [2] from start
+  const clean = refText.replace(/^\[\d+\]\s*/, '').trim();
+  return `https://scholar.google.com/scholar?q=${encodeURIComponent(clean)}`;
+};
+
+// Detect if a bullet is a reference-like entry (for the summary References slide)
+const isReferencesSlide = (title: string): boolean =>
+  /^(references|bibliography|sources|works cited|citations)$/i.test(title.trim());
+
 // Render inline citation markers [1], [2] as styled superscripts
 const renderWithCitations = (text: string): React.ReactNode => {
   const parts = text.split(/(\[\d+\])/g);
@@ -616,15 +627,34 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
             overflow: 'auto', minHeight: 0,
             maxHeight: isVertical && hasFigure ? '40%' : undefined,
           }}>
-            {slide.content!.map((item, i) => (
-              <div key={i} style={{
-                display: 'flex', gap: '10px', alignItems: 'flex-start',
-                fontSize: '15px', color: COLORS.text, lineHeight: '1.6',
-              }}>
-                <span style={{ color: COLORS.accent, fontWeight: 700, flexShrink: 0 }}>{'\u203A'}</span>
-                <span>{renderWithCitations(decodeEntities(item))}</span>
-              </div>
-            ))}
+            {slide.content!.map((item, i) => {
+              const decoded = decodeEntities(item);
+              const isRefSlide = isReferencesSlide(slide.title);
+              return (
+                <div key={i} style={{
+                  display: 'flex', gap: '10px', alignItems: 'flex-start',
+                  fontSize: isRefSlide ? '13px' : '15px',
+                  color: COLORS.text, lineHeight: '1.6',
+                }}>
+                  <span style={{ color: COLORS.accent, fontWeight: 700, flexShrink: 0 }}>{'\u203A'}</span>
+                  {isRefSlide ? (
+                    <a
+                      href={buildScholarUrl(decoded)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: 'inherit', textDecoration: 'none' }}
+                      onMouseEnter={e => { (e.target as HTMLElement).style.textDecoration = 'underline'; (e.target as HTMLElement).style.color = COLORS.cyan; }}
+                      onMouseLeave={e => { (e.target as HTMLElement).style.textDecoration = 'none'; (e.target as HTMLElement).style.color = 'inherit'; }}
+                      title="Search on Google Scholar"
+                    >
+                      {decoded}
+                    </a>
+                  ) : (
+                    <span>{renderWithCitations(decoded)}</span>
+                  )}
+                </div>
+              );
+            })}
 
             {/* Per-slide footnote references — pinned below bullets */}
             {slide.references && slide.references.length > 0 && (
@@ -652,7 +682,17 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
                     }}>
                       [{i + 1}]
                     </span>
-                    {ref}
+                    <a
+                      href={buildScholarUrl(ref)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: 'inherit', textDecoration: 'none' }}
+                      onMouseEnter={e => { (e.target as HTMLElement).style.textDecoration = 'underline'; }}
+                      onMouseLeave={e => { (e.target as HTMLElement).style.textDecoration = 'none'; }}
+                      title="Search on Google Scholar"
+                    >
+                      {ref}
+                    </a>
                   </div>
                 ))}
               </div>

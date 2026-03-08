@@ -26,6 +26,7 @@ export default function AppShell() {
     maxOutputTokens, setMaxOutputTokens,
     extractionModel, setExtractionModel,
     lastTokenUsage,
+    assessmentState, startAssessment,
     showSidebar, setShowSidebar, savedSessions,
     currentSessionId, loadingSessions, sessionBusy, sageMemory,
     loadSession, deleteSession, newSession, clearAllSessions,
@@ -624,6 +625,8 @@ Return your answer as JSON ONLY, no other text:
               loadingMsg={loadingMsg}
               autoSearchActive={autoSearchActive}
               selectedModelName={availableModels.find(m => m.id === selectedModel)?.name || selectedModel}
+              assessmentPhase={assessmentState.phase}
+              hasPresentation={presentationState.slides.length > 0}
             />
           )}
 
@@ -642,6 +645,7 @@ Return your answer as JSON ONLY, no other text:
               onToggleAutoAdvance={handleToggleAutoAdvance}
               onToggleNotes={handleToggleNotes}
               onAskAboutSlides={handleAskAboutSlides}
+              onAssessMe={() => { setActiveTab('chat'); startAssessment(); }}
               onShowPromptEditor={handleShowPromptEditor}
               onRevertFigure={handleRevertFigure}
               onShowCropEditor={handleShowCropEditor}
