@@ -8,8 +8,9 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Allow long-running streams (deep analysis can take 10+ minutes)
-export const maxDuration = 300; // 5 minutes — Vercel Pro plan max
+// Allow long-running streams — configurable via MAX_DURATION env var.
+// Vercel Pro: set to 300 (5 min max). Local dev: set higher as needed.
+export const maxDuration = Number(process.env.MAX_DURATION) || 300;
 
 // ── In-memory rate limiter for free-mode (server-key) requests ────
 // Tracks requests per IP with a sliding window. Resets every WINDOW_MS.
