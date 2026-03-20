@@ -97,6 +97,17 @@ export default function AppShell() {
     }));
   };
 
+  // --- Auto-save poster edits (debounced) ---
+  const posterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const posterInitialRef = useRef(true);
+  useEffect(() => {
+    // Skip initial mount — only save on actual edits
+    if (posterInitialRef.current) { posterInitialRef.current = false; return; }
+    if (!posterState || Object.keys(posterState.cards).length === 0) return;
+    if (posterDebounceRef.current) clearTimeout(posterDebounceRef.current);
+    posterDebounceRef.current = setTimeout(() => persistSession(), 500);
+  }, [posterState, persistSession]);
+
   // --- Inline speaker notes editing (debounced persist) ---
   const notesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Stable ref for presentationState — lets useCallback closures read current value

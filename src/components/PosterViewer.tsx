@@ -113,7 +113,14 @@ export default function PosterViewer({
 }: PosterViewerProps) {
   const [selectedCard, setSelectedCard] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
-  const [fontScale, setFontScale] = useState(1.3);
+  // fontScale lives in posterState so it persists across sessions
+  const fontScale = posterState.fontScale ?? 1.3;
+  const setFontScale = useCallback((updater: (prev: number) => number) => {
+    setPosterState(prev => {
+      if (!prev) return prev;
+      return { ...prev, fontScale: updater(prev.fontScale ?? 1.3) };
+    });
+  }, [setPosterState]);
   const currentScaleRef = useRef(1);
   const posterRootRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -149,12 +156,7 @@ export default function PosterViewer({
   // Re-fit when poster state changes
   useEffect(() => { fit(); }, [posterState, fit]);
 
-  // Apply font scale as CSS variable
-  useEffect(() => {
-    if (posterRootRef.current) {
-      posterRootRef.current.style.setProperty('--poster-font-scale', String(fontScale));
-    }
-  }, [fontScale]);
+  // fontScale is now set as inline style on poster-root (no useEffect needed)
 
   // Click outside to deselect
   useEffect(() => {
@@ -447,6 +449,7 @@ export default function PosterViewer({
       <div
         ref={posterRootRef}
         className={`poster-root${preview ? ' preview' : ''}`}
+        style={{ '--poster-font-scale': fontScale } as React.CSSProperties}
       >
         {/* Header */}
         <div className="poster-header">

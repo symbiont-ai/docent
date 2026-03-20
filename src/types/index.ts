@@ -303,6 +303,7 @@ export interface PosterState {
   authors: string;
   affiliations: string;
   language: string;
+  fontScale?: number;
   columns: PosterColumn[];
   cards: Record<string, PosterCard>;
 }
