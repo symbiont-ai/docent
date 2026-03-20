@@ -15,7 +15,7 @@ import type { ExtractedFigure, ExtractionResult } from '@/src/types';
 export const EXTRACTION_MODEL = 'google/gemini-2.5-flash';
 
 /** Max output tokens for the extraction response (structured JSON) */
-export const EXTRACTION_MAX_TOKENS = 8192;
+export const EXTRACTION_MAX_TOKENS = 16384;
 
 /** Hard cap on pages to send to extraction (even if no supplementary detected) */
 const MAX_EXTRACTION_PAGES = 30;
@@ -525,11 +525,53 @@ export async function extractFiguresFromPdf(
 
 // ── JSON parsing with repair ─────────────────────────────────
 
+/**
+ * Attempt to repair truncated JSON by:
+ * 1. Trimming to the last complete object (ends with })
+ * 2. Closing all open brackets/braces
+ */
+function repairTruncatedJson(json: string): string | null {
+  const lastCompleteObj = json.lastIndexOf('}');
+  if (lastCompleteObj === -1) return null;
+
+  let trimmed = json.substring(0, lastCompleteObj + 1);
+
+  // Count unclosed brackets and braces (respecting strings)
+  let openBraces = 0;
+  let openBrackets = 0;
+  let inString = false;
+  let escape = false;
+
+  for (const ch of trimmed) {
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') openBraces++;
+    else if (ch === '}') openBraces--;
+    else if (ch === '[') openBrackets++;
+    else if (ch === ']') openBrackets--;
+  }
+
+  for (let i = 0; i < openBrackets; i++) trimmed += ']';
+  for (let i = 0; i < openBraces; i++) trimmed += '}';
+
+  return trimmed;
+}
+
 export function parseExtractionResponse(raw: string): ExtractedFigure[] {
   // Extract JSON from markdown code blocks if present
   let jsonStr = raw;
   const jsonBlock = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (jsonBlock) jsonStr = jsonBlock[1];
+  if (jsonBlock) {
+    jsonStr = jsonBlock[1];
+  } else {
+    // Handle truncated code blocks (LLM ran out of tokens before closing ```)
+    const openFence = raw.match(/^```(?:json)?\s*\n?/);
+    if (openFence) {
+      jsonStr = raw.slice(openFence[0].length);
+    }
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let parsed: any;
@@ -551,18 +593,65 @@ export function parseExtractionResponse(raw: string): ExtractedFigure[] {
     }
 
     if (!parsed) {
-      // Attempt repair: find first { to last }
       const start = jsonStr.indexOf('{');
       const end = jsonStr.lastIndexOf('}');
-      if (start === -1 || end === -1) {
+
+      if (start === -1) {
         console.error('[Extraction] No valid JSON found in response. Raw (first 500 chars):', jsonStr.slice(0, 500));
         return [];
       }
-      try {
-        parsed = JSON.parse(jsonStr.substring(start, end + 1));
-      } catch {
-        console.error('[Extraction] Failed to parse JSON response. Raw (first 500 chars):', jsonStr.slice(0, 500));
-        return [];
+
+      // If no closing }, try aggressive repair on everything from first {
+      if (end === -1 || end <= start) {
+        const repaired = repairTruncatedJson(jsonStr.substring(start));
+        if (repaired) {
+          try { parsed = JSON.parse(repaired); console.warn('[Extraction] Parsed after aggressive repair'); } catch { /* fall through */ }
+        }
+      }
+
+      if (!parsed) {
+        try {
+          parsed = JSON.parse(jsonStr.substring(start, (end !== -1 ? end : jsonStr.length - 1) + 1));
+        } catch {
+          // Try repair on { to } substring
+          const truncated = jsonStr.substring(start, (end !== -1 ? end : jsonStr.length - 1) + 1);
+          const repaired = repairTruncatedJson(truncated);
+          if (repaired) {
+            try { parsed = JSON.parse(repaired); console.warn('[Extraction] Parsed after truncated JSON repair'); } catch { /* fall through */ }
+          }
+
+          // Try repair on everything from first {
+          if (!parsed) {
+            const fullRepaired = repairTruncatedJson(jsonStr.substring(start));
+            if (fullRepaired) {
+              try { parsed = JSON.parse(fullRepaired); console.warn('[Extraction] Parsed after full-string repair'); } catch { /* fall through */ }
+            }
+          }
+
+          // Last resort: extract individual complete objects from the figures array
+          if (!parsed) {
+            const figuresMatch = jsonStr.match(/"figures"\s*:\s*\[/);
+            if (figuresMatch) {
+              const arrayStart = jsonStr.indexOf('[', jsonStr.indexOf(figuresMatch[0]));
+              const objectRegex = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
+              const afterArray = jsonStr.substring(arrayStart);
+              const objects: unknown[] = [];
+              let match;
+              while ((match = objectRegex.exec(afterArray)) !== null) {
+                try { objects.push(JSON.parse(match[0])); } catch { /* skip malformed */ }
+              }
+              if (objects.length > 0) {
+                parsed = { figures: objects };
+                console.warn(`[Extraction] Recovered ${objects.length} figure(s) from truncated response`);
+              }
+            }
+          }
+
+          if (!parsed) {
+            console.error('[Extraction] Failed to parse JSON response. Raw (first 500 chars):', jsonStr.slice(0, 500));
+            return [];
+          }
+        }
       }
     }
   }
@@ -1077,7 +1166,7 @@ async function recoverMissingElements(
     const { content: raw } = await callChat({
       messages: [{ role: 'user' as const, content: recoveryBlocks }],
       model,
-      max_tokens: 4096,
+      max_tokens: 8192,
       system: RECOVERY_PROMPT,
       temperature: 0,
     }, apiKey, signal);

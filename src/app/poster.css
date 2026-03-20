@@ -4,7 +4,7 @@
    ========================================================== */
 
 /* === Print page setup === */
-@page poster {
+@page {
   size: 841mm 594mm;
   margin: 0;
 }
@@ -188,6 +188,26 @@
 }
 .poster-fig .poster-cap b { color: var(--poster-text, #222); }
 
+/* Crop button on figures */
+.poster-fig { position: relative; }
+.poster-crop-btn {
+  position: absolute;
+  top: 1mm;
+  left: 1mm;
+  z-index: 10;
+  padding: 1mm 2.5mm;
+  font-size: 7pt;
+  border-radius: 1.5mm;
+  border: 1px solid rgba(0,0,0,0.25);
+  background: rgba(255,255,255,0.8);
+  color: #333;
+  cursor: pointer;
+  opacity: 0.5;
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+.poster-crop-btn:hover { opacity: 1; background: rgba(255,255,255,0.95); }
+
 /* Tables */
 .poster-card table {
   width: 100%;
@@ -320,7 +340,8 @@
 .poster-root.preview .poster-divider,
 .poster-root.preview .poster-swap-handle,
 .poster-root.preview .poster-drop-zone,
-.poster-root.preview .poster-toolbar { display: none !important; }
+.poster-root.preview .poster-toolbar,
+.poster-root.preview .poster-crop-btn { display: none !important; }
 
 /* === Print styles === */
 @media print {
@@ -328,26 +349,31 @@
   .poster-toolbar,
   .poster-divider,
   .poster-swap-handle,
-  .poster-drop-zone { display: none !important; }
+  .poster-drop-zone,
+  .poster-crop-btn { display: none !important; }
 
-  /* Hide top bar, sidebar, banners, and all non-poster content */
+  /* Hide everything except the poster */
   body > * { visibility: hidden; }
   .poster-viewport,
   .poster-viewport * { visibility: visible !important; }
+
+  /* The viewport becomes a transparent pass-through */
   .poster-viewport {
     position: fixed !important;
     top: 0 !important; left: 0 !important;
-    width: 100vw !important; height: 100vh !important;
+    width: 841mm !important; height: 594mm !important;
     background: none !important;
     overflow: visible !important;
     z-index: 99999 !important;
   }
+
+  /* Poster keeps its natural mm dimensions — fonts and layout match the screen exactly */
   .poster-root {
     transform: none !important;
     box-shadow: none !important;
     position: static !important;
-    width: 100% !important;
-    height: 100% !important;
+    width: 841mm !important;
+    height: 594mm !important;
   }
 }
 

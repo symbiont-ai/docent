@@ -96,6 +96,8 @@ export function useSessions() {
 
   const savingRef = useRef(false);
   const justClearedRef = useRef(false);
+  const savedSessionsRef = useRef(savedSessions);
+  savedSessionsRef.current = savedSessions;
 
   /**
    * Load list of all saved sessions from IndexedDB.
@@ -260,7 +262,7 @@ export function useSessions() {
         assessment: null,
         messageCount: msgs.filter(m => !m.isThinking).length,
         createdAt: existingSessionId
-          ? (savedSessions.find(s => s.id === sessionId)?.createdAt || now)
+          ? (savedSessionsRef.current.find(s => s.id === sessionId)?.createdAt || now)
           : now,
         updatedAt: now,
       };
@@ -268,8 +270,18 @@ export function useSessions() {
       await storage.set(`${SESSION_PREFIX}${sessionId}`, JSON.stringify(session));
       setCurrentSessionId(sessionId);
 
-      // Refresh session list
-      await loadSavedSessions();
+      // Update session list in-place (avoids full IndexedDB re-fetch which causes re-render churn)
+      setSavedSessions(prev => {
+        const idx = prev.findIndex(s => s.id === sessionId);
+        if (idx >= 0) {
+          // Update existing session in place
+          const updated = [...prev];
+          updated[idx] = session;
+          return updated;
+        }
+        // New session — insert at front (most recent first)
+        return [session, ...prev];
+      });
 
       return sessionId;
     } catch (e) {
@@ -278,7 +290,7 @@ export function useSessions() {
     } finally {
       savingRef.current = false;
     }
-  }, [savedSessions, chunkDataURL, loadSavedSessions]);
+  }, [chunkDataURL]);
 
   /**
    * Load a saved session, restoring messages, files, and presentation state.

@@ -207,35 +207,37 @@ export default function Sidebar({
                     backgroundColor: isActive ? COLORS.surfaceHover : 'transparent',
                     border: isActive ? `1px solid ${COLORS.accentBorder}` : '1px solid transparent',
                     opacity: sessionBusy ? 0.6 : 1,
+                    display: 'flex', alignItems: 'flex-start', gap: '6px',
+                    overflow: 'hidden',
                   }}
                 >
-                  <div style={{
-                    fontSize: '13px', fontWeight: 500, color: COLORS.text,
-                    marginBottom: '2px', overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    fontFamily: 'system-ui, sans-serif',
-                  }}>
-                    {session.title}
-                  </div>
-                  <div style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  }}>
-                    <span style={{
-                      fontSize: '11px', color: COLORS.textDim,
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDeleteSession(session.id); }}
+                    style={{
+                      padding: '2px 4px', fontSize: '10px', flexShrink: 0,
+                      backgroundColor: 'transparent', color: COLORS.red,
+                      border: 'none', cursor: 'pointer', opacity: 0.6,
+                      lineHeight: 1,
+                    }}
+                  >
+                    {'\u2715'}
+                  </button>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{
+                      fontSize: '13px', fontWeight: 500, color: COLORS.text,
+                      marginBottom: '2px', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       fontFamily: 'system-ui, sans-serif',
                     }}>
+                      {session.title}
+                    </div>
+                    <div style={{
+                      fontSize: '11px', color: COLORS.textDim,
+                      fontFamily: 'system-ui, sans-serif',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
                       {subtitle} {'\u00B7'} {formatDate(session.updatedAt)}
-                    </span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onDeleteSession(session.id); }}
-                      style={{
-                        padding: '2px 6px', fontSize: '10px',
-                        backgroundColor: 'transparent', color: COLORS.red,
-                        border: 'none', cursor: 'pointer', opacity: 0.6,
-                      }}
-                    >
-                      {'\u2715'}
-                    </button>
+                    </div>
                   </div>
                 </div>
               );

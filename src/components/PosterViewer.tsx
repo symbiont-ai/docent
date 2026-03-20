@@ -9,6 +9,8 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import type { PosterState, PosterCard, PosterColumn, Figure, ExtractedFigure } from '@/src/types';
+import CropEditor from './CropEditor';
+import { decodeEntities } from '@/src/lib/presentation';
 import '@/src/app/poster.css';
 
 // mm → px conversion factor (CSS reference pixel)
@@ -20,6 +22,8 @@ interface PosterViewerProps {
   posterState: PosterState;
   setPosterState: React.Dispatch<React.SetStateAction<PosterState | null>>;
   extractedFigures?: ExtractedFigure[];
+  pdfThumbnails?: string[];
+  cropFn?: (page: number, region: number[] | string | undefined) => Promise<string | null>;
   onClear?: () => void;
 }
 
@@ -49,7 +53,24 @@ function preprocessSvg(html: string): string {
 }
 
 // Render a figure element
-function FigureRenderer({ figure, extractedFigures }: { figure: Figure; extractedFigures?: ExtractedFigure[] }) {
+function FigureRenderer({ figure, extractedFigures, onCrop }: {
+  figure: Figure;
+  extractedFigures?: ExtractedFigure[];
+  onCrop?: () => void;
+}) {
+  // Crop button shown for any image-based figure type (pdf_crop or extracted_ref)
+  // Page resolution happens when the CropEditor actually opens
+  const isCroppable = figure.type === 'pdf_crop' || figure.type === 'extracted_ref';
+  const cropBtn = onCrop && isCroppable ? (
+    <button
+      className="poster-crop-btn"
+      onClick={(e) => { e.stopPropagation(); onCrop(); }}
+      title="Adjust crop region"
+    >
+      ✂️ Crop
+    </button>
+  ) : null;
+
   if (figure.type === 'svg' && figure.content) {
     const processed = preprocessSvg(figure.content);
     return (
@@ -69,6 +90,7 @@ function FigureRenderer({ figure, extractedFigures }: { figure: Figure; extracte
     if (imgSrc) {
       return (
         <div className="poster-fig">
+          {cropBtn}
           <div className="poster-fig-wrap">
             <img src={imgSrc} alt={figure.label || ef?.description || ''} />
           </div>
@@ -94,6 +116,7 @@ function FigureRenderer({ figure, extractedFigures }: { figure: Figure; extracte
   if (figure.type === 'pdf_crop' && figure.croppedDataURL) {
     return (
       <div className="poster-fig">
+        {cropBtn}
         <div className="poster-fig-wrap">
           <img src={figure.croppedDataURL} alt={figure.label || ''} />
         </div>
@@ -109,10 +132,14 @@ export default function PosterViewer({
   posterState,
   setPosterState,
   extractedFigures,
+  pdfThumbnails,
+  cropFn,
   onClear,
 }: PosterViewerProps) {
   const [selectedCard, setSelectedCard] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
+  // Crop editor state — tracks which card is being cropped
+  const [cropCardId, setCropCardId] = useState<string | null>(null);
   // fontScale lives in posterState so it persists across sessions
   const fontScale = posterState.fontScale ?? 1.3;
   const setFontScale = useCallback((updater: (prev: number) => number) => {
@@ -332,33 +359,39 @@ export default function PosterViewer({
             &#x2725;
           </button>
         )}
-        <h2>{card.title}</h2>
+        <h2>{decodeEntities(card.title)}</h2>
 
         {/* Highlights */}
         {card.highlights?.map((hl, i) => (
-          <div key={`hl-${i}`} className="poster-hl"><p>{hl}</p></div>
+          <div key={`hl-${i}`} className="poster-hl"><p>{decodeEntities(hl)}</p></div>
         ))}
 
         {/* Bullets */}
         {card.bullets && card.bullets.length > 0 && (
           <ul>
-            {card.bullets.map((b, i) => <li key={i}>{b}</li>)}
+            {card.bullets.map((b, i) => <li key={i}>{decodeEntities(b)}</li>)}
           </ul>
         )}
 
         {/* Figure */}
-        {card.figure && <FigureRenderer figure={card.figure} extractedFigures={extractedFigures} />}
+        {card.figure && (
+          <FigureRenderer
+            figure={card.figure}
+            extractedFigures={extractedFigures}
+            onCrop={!preview && pdfThumbnails && cropFn ? () => setCropCardId(cardId) : undefined}
+          />
+        )}
 
         {/* Table */}
         {card.table && (
           <table>
             <thead>
-              <tr>{card.table.headers.map((h, i) => <th key={i}>{h}</th>)}</tr>
+              <tr>{card.table.headers.map((h, i) => <th key={i}>{decodeEntities(h)}</th>)}</tr>
             </thead>
             <tbody>
               {card.table.rows.map((row, ri) => (
                 <tr key={ri}>
-                  {row.map((cell, ci) => <td key={ci}>{cell}</td>)}
+                  {row.map((cell, ci) => <td key={ci}>{decodeEntities(String(cell))}</td>)}
                 </tr>
               ))}
             </tbody>
@@ -454,9 +487,9 @@ export default function PosterViewer({
         {/* Header */}
         <div className="poster-header">
           <div className="poster-header-left">
-            <h1>{posterState.title}</h1>
-            {posterState.authors && <div className="poster-authors">{posterState.authors}</div>}
-            {posterState.affiliations && <div className="poster-affiliations">{posterState.affiliations}</div>}
+            <h1>{decodeEntities(posterState.title)}</h1>
+            {posterState.authors && <div className="poster-authors">{decodeEntities(posterState.authors)}</div>}
+            {posterState.affiliations && <div className="poster-affiliations">{decodeEntities(posterState.affiliations)}</div>}
           </div>
         </div>
 
@@ -475,6 +508,61 @@ export default function PosterViewer({
           ))}
         </div>
       </div>
+
+      {/* Crop Editor Modal */}
+      {cropCardId && cropFn && (() => {
+        const card = posterState.cards[cropCardId];
+        const fig = card?.figure;
+        if (!fig || !pdfThumbnails) return null;
+        // Resolve page from figure or extracted catalog
+        const ef = fig.extractedId ? extractedFigures?.find(f => f.id === fig.extractedId) : undefined;
+        const page = fig.page || ef?.page;
+        if (!page) return null;
+        const thumb = pdfThumbnails[page - 1];
+        if (!thumb) return null;
+        // Build a Figure-compatible object with region for the CropEditor
+        const cropFigure: Figure = {
+          ...fig,
+          type: 'pdf_crop',
+          page,
+          region: fig.region || ef?.region || [0, 0, 1, 1],
+        };
+        return (
+          <CropEditor
+            figure={cropFigure}
+            pageThumb={thumb}
+            cropFn={cropFn}
+            onApply={async (newRegion: number[]) => {
+              const cardId = cropCardId;
+              setCropCardId(null);
+              // Resolve crop immediately so the poster updates
+              const croppedDataURL = await cropFn(page, newRegion) || undefined;
+              setPosterState(prev => {
+                if (!prev) return prev;
+                const card = prev.cards[cardId];
+                if (!card?.figure) return prev;
+                return {
+                  ...prev,
+                  cards: {
+                    ...prev.cards,
+                    [cardId]: {
+                      ...card,
+                      figure: {
+                        ...card.figure,
+                        type: 'pdf_crop',
+                        region: newRegion,
+                        croppedDataURL,
+                        page,
+                      },
+                    },
+                  },
+                };
+              });
+            }}
+            onCancel={() => setCropCardId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

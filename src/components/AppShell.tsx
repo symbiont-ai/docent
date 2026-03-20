@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useChat } from '@/src/hooks/useChat';
 import { COLORS } from '@/src/lib/colors';
 import { buildImagePrompt, buildEditorPrompt, buildImageSearchPrompt } from '@/src/lib/presentation';
@@ -723,6 +723,8 @@ Return your answer as JSON ONLY, no other text:
               posterState={posterState}
               setPosterState={setPosterState}
               extractedFigures={extractedFigures}
+              pdfThumbnails={pdfThumbnails}
+              cropFn={cropPdfFigure}
               onClear={() => setPosterState(null)}
             />
           )}
@@ -732,6 +734,8 @@ Return your answer as JSON ONLY, no other text:
               posterState={{ title: '', authors: '', affiliations: '', language: 'en', columns: [], cards: {} }}
               setPosterState={setPosterState}
               extractedFigures={extractedFigures}
+              pdfThumbnails={pdfThumbnails}
+              cropFn={cropPdfFigure}
               onClear={() => setPosterState(null)}
             />
           )}

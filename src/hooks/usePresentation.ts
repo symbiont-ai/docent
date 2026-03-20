@@ -144,9 +144,11 @@ export function usePresentation(
     // Skip for Author mode — the author wouldn't display their own paper as a figure
     if (pdfDoc && pdfTotalPages && pdfTotalPages > 0 && slides.length > 0 && mode !== 'author') {
       const titleSlide = slides[0];
-      // Inject if: no figure, text_only layout, or model generated a decorative SVG (PDF crop takes priority)
+      // Always inject the paper title page crop on the first slide —
+      // the LLM may assign an extracted_ref or other figure, but the title slide
+      // should visually anchor the audience with the paper's title page.
       if (!titleSlide.figure || titleSlide.layout === 'text_only' ||
-          (titleSlide.figure.type === 'svg' && pdfDoc)) {
+          titleSlide.figure.type === 'svg' || titleSlide.figure.type === 'extracted_ref') {
         slides[0] = {
           ...titleSlide,
           layout: 'figure_focus',
