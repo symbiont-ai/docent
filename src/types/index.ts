@@ -53,12 +53,6 @@ export interface ExtractedFigure {
   apiDataURL?: string;                            // Compressed JPEG for API use (max 800px, 70% quality)
 }
 
-/** LLM-detected document structure from the extraction pass. */
-export interface LLMDocumentStructure {
-  mainContentEndPage: number;          // Last page of core content (main body + refs + methods + extended data)
-  supplementaryStartPage: number | null; // First page of supplementary material (null if none)
-}
-
 /** Result of the extraction pass (Pass 1). */
 export interface ExtractionResult {
   figures: ExtractedFigure[];
@@ -66,7 +60,6 @@ export interface ExtractionResult {
   extractedAt: number;
   mainBodyPages: number;              // Pages analyzed (before supplementary cutoff)
   supplementaryStartPage?: number;    // First page of supplementary material (if detected)
-  llmStructure?: LLMDocumentStructure; // LLM-detected document structure (overrides regex when available)
 }
 
 // ── Assessment (Socratic) ─────────────────────────────────
@@ -193,6 +186,8 @@ export interface Session {
   auditResults?: Record<number, AuditResult>;
   /** Deep analysis report markdown — persisted so it survives session reload */
   deepAnalysisReport?: string;
+  /** Poster state — persisted so posters survive session reload */
+  poster?: PosterState | null;
   pdfViewer: {
     page: number;
     zoom: number;
@@ -278,5 +273,36 @@ export interface ChatApiRequest {
   };
 }
 
-export type ActiveTab = 'chat' | 'pdf' | 'slides';
+export type ActiveTab = 'chat' | 'pdf' | 'slides' | 'poster';
 export type SidebarTab = 'sessions' | 'memory';
+
+// ── Poster Types ──
+
+export type PosterCardColor = 'blue' | 'orange' | 'teal' | 'purple' | 'red';
+
+export interface PosterCard {
+  title: string;
+  color?: PosterCardColor;
+  grow?: boolean;
+  heightMm?: number;
+  highlights?: string[];
+  bullets?: string[];
+  figure?: Figure;
+  table?: { headers: string[]; rows: string[][] };
+  equation?: string;
+}
+
+export interface PosterColumn {
+  id: string;
+  widthMm: number | null;  // null = flex (fills remaining space)
+  cards: string[];          // card IDs referencing PosterState.cards
+}
+
+export interface PosterState {
+  title: string;
+  authors: string;
+  affiliations: string;
+  language: string;
+  columns: PosterColumn[];
+  cards: Record<string, PosterCard>;
+}

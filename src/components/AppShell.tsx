@@ -14,6 +14,7 @@ import PDFViewer from './PDFViewer';
 import ExportOverlay from './ExportOverlay';
 import SettingsModal from './SettingsModal';
 import CropEditor from './CropEditor';
+import PosterViewer from './PosterViewer';
 import type { PresentationState, Figure } from '@/src/types';
 
 export default function AppShell() {
@@ -21,7 +22,7 @@ export default function AppShell() {
     messages, input, setInput, isLoading, loadingMsg, error, setError,
     activeTab, setActiveTab, searchMode, setSearchMode, deepThinking,
     setDeepThinking, handleSend, showSettings, setShowSettings,
-    voiceGender, setVoiceGender, apiKey, setApiKey, selectedModel,
+    voiceGender, setVoiceGender, apiKey, setApiKey, freeMode, selectedModel,
     setSelectedModel, availableModels, modelsLoading,
     maxOutputTokens, setMaxOutputTokens,
     extractionModel, setExtractionModel,
@@ -33,7 +34,7 @@ export default function AppShell() {
     loadSession, deleteSession, newSession, clearAllSessions,
     deleteMemoryNote, clearAllMemory, autoVoice, setAutoVoice,
     ttsEngine, setTTSEngine, googleApiKey, setGoogleApiKey, browserVoiceName, setBrowserVoiceName,
-    isSpeaking, isLoadingAudio, speak, speakChat, stopSpeaking, uploadedFiles, removeFile,
+    isSpeaking, isLoadingAudio, speak, stopSpeaking, uploadedFiles, removeFile,
     fileInputRef, handleFileUpload, pdfDoc, pdfPage, setPdfPage,
     pdfTotalPages, pdfZoom, setPdfZoom, pdfCanvasRef, pdfContainerRef,
     removePdf, renderPdfPage, cropPdfFigure, pdfThumbnails, presentationState, setPresentationState, persistSession,
@@ -41,6 +42,7 @@ export default function AppShell() {
     narrateSlide, stopNarration, exportPresentationPPTX, exportPresentationHTML,
     exportHtml, setExportHtml, cancelGeneration, messagesEndRef,
     autoSearchActive,
+    posterState, setPosterState, extractedFigures,
   } = useChat();
 
   // --- Image generation state ---
@@ -57,10 +59,10 @@ export default function AppShell() {
   // --- Model's max completion tokens for settings slider ---
   const modelMaxTokens = availableModels.find(m => m.id === selectedModel)?.maxCompletionTokens || 32000;
 
-  // --- Speak handler for chat (toggle) — always uses browser TTS ---
+  // --- Speak handler (toggle) ---
   const handleSpeak = (text: string, lang?: string) => {
     if (isSpeaking) stopSpeaking();
-    else speakChat(text, undefined, lang);
+    else speak(text, undefined, lang);
   };
 
   // --- Slide navigation ---
@@ -465,24 +467,27 @@ Return your answer as JSON ONLY, no other text:
       />
 
       {/* ===== TOP BAR ===== */}
-      <TopBar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        pdfDoc={pdfDoc}
-        pdfTotalPages={pdfTotalPages}
-        slidesCount={presentationState.slides.length}
-        autoVoice={autoVoice}
-        setAutoVoice={setAutoVoice}
-        isSpeaking={isSpeaking}
-        stopSpeaking={stopSpeaking}
-        showSidebar={showSidebar}
-        setShowSidebar={setShowSidebar}
-        setShowSettings={setShowSettings}
-      />
+      <div className="print-hide">
+        <TopBar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          pdfDoc={pdfDoc}
+          pdfTotalPages={pdfTotalPages}
+          slidesCount={presentationState.slides.length}
+          hasPoster={!!posterState && Object.keys(posterState.cards).length > 0}
+          autoVoice={autoVoice}
+          setAutoVoice={setAutoVoice}
+          isSpeaking={isSpeaking}
+          stopSpeaking={stopSpeaking}
+          showSidebar={showSidebar}
+          setShowSidebar={setShowSidebar}
+          setShowSettings={setShowSettings}
+        />
+      </div>
 
       {/* ===== LOADING STATUS BAR ===== */}
       {isLoading && (
-        <div style={{
+        <div className="print-hide" style={{
           padding: '8px 20px', backgroundColor: COLORS.surface,
           borderBottom: `1px solid ${COLORS.border}`,
           display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0,
@@ -501,7 +506,7 @@ Return your answer as JSON ONLY, no other text:
             <span style={{
               fontSize: '11px', color: COLORS.cyan, padding: '2px 8px',
               backgroundColor: COLORS.cyanBg, borderRadius: '4px',
-              border: `1px solid ${COLORS.cyan}40`,
+              border: `1px solid ${COLORS.cyanBorder}`,
             }}>
               {'\uD83D\uDD0D'} search on
             </span>
@@ -509,7 +514,7 @@ Return your answer as JSON ONLY, no other text:
           <span
             onClick={cancelGeneration}
             style={{
-              fontSize: '12px', color: '#FFFFFF', textDecoration: 'underline',
+              fontSize: '12px', color: COLORS.text, textDecoration: 'underline',
               cursor: 'pointer', marginLeft: '4px',
             }}
           >
@@ -518,9 +523,29 @@ Return your answer as JSON ONLY, no other text:
         </div>
       )}
 
+      {/* ===== FREE MODE BANNER ===== */}
+      {freeMode && !isLoading && (
+        <div className="print-hide" style={{
+          padding: '6px 20px', backgroundColor: '#1a2332',
+          borderBottom: `1px solid ${COLORS.border}`,
+          display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0,
+        }}>
+          <span style={{
+            fontSize: '11px', color: '#22d3ee', padding: '2px 8px',
+            backgroundColor: 'rgba(34,211,238,0.1)', borderRadius: '4px',
+            border: '1px solid rgba(34,211,238,0.25)', fontWeight: 600,
+          }}>
+            FREE
+          </span>
+          <span style={{ fontSize: '12px', color: COLORS.textMuted, fontFamily: 'system-ui, sans-serif' }}>
+            Using shared API key (Gemini 2.5 Flash, rate limited). Add your own key in Settings for full access.
+          </span>
+        </div>
+      )}
+
       {/* ===== TOKEN USAGE BAR ===== */}
       {!isLoading && lastTokenUsage && (
-        <div style={{
+        <div className="print-hide" style={{
           padding: '6px 20px', backgroundColor: COLORS.surface,
           borderBottom: `1px solid ${COLORS.border}`,
           display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0,
@@ -535,9 +560,9 @@ Return your answer as JSON ONLY, no other text:
 
       {/* ===== ERROR BAR ===== */}
       {!isLoading && error && (
-        <div style={{
+        <div className="print-hide" style={{
           padding: '8px 20px', backgroundColor: COLORS.redBg,
-          borderBottom: `1px solid ${COLORS.red}40`,
+          borderBottom: `1px solid ${COLORS.redBorder}`,
           display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0,
         }}>
           <span style={{
@@ -625,7 +650,7 @@ Return your answer as JSON ONLY, no other text:
               messagesEndRef={messagesEndRef}
               loadingMsg={loadingMsg}
               autoSearchActive={autoSearchActive}
-              selectedModelName={availableModels.find(m => m.id === selectedModel)?.name || selectedModel}
+              selectedModelName={freeMode ? 'Gemini 2.5 Flash (Free)' : (availableModels.find(m => m.id === selectedModel)?.name || selectedModel)}
               assessmentPhase={assessmentState.phase}
               hasPresentation={presentationState.slides.length > 0}
             />
@@ -679,6 +704,24 @@ Return your answer as JSON ONLY, no other text:
               fileInputRef={fileInputRef}
               onRemovePdf={removePdf}
               onMount={renderPdfPage}
+            />
+          )}
+
+          {activeTab === 'poster' && posterState && (
+            <PosterViewer
+              posterState={posterState}
+              setPosterState={setPosterState}
+              extractedFigures={extractedFigures}
+              onClear={() => setPosterState(null)}
+            />
+          )}
+
+          {activeTab === 'poster' && !posterState && (
+            <PosterViewer
+              posterState={{ title: '', authors: '', affiliations: '', language: 'en', columns: [], cards: {} }}
+              setPosterState={setPosterState}
+              extractedFigures={extractedFigures}
+              onClear={() => setPosterState(null)}
             />
           )}
         </main>
@@ -836,6 +879,7 @@ Return your answer as JSON ONLY, no other text:
         modelMaxTokens={modelMaxTokens}
         extractionModel={extractionModel}
         setExtractionModel={setExtractionModel}
+        freeMode={freeMode}
       />
     </div>
   );

@@ -185,7 +185,7 @@ export default function ModelPicker({
         </div>
         <div><span style={{ color: COLORS.accent }}>Vision required</span> {'\u2014'} PDF presentations with figure cropping (e.g. Claude, GPT-4o, Gemini)</div>
         <div><span style={{ color: COLORS.textMuted }}>Any model</span> {'\u2014'} topic-based presentations, chat, PDF summaries (uses extracted text)</div>
-        <div><span style={{ color: '#A78BFA' }}>Reasoning recommended</span> {'\u2014'} complex multi-step analysis, deep thinking tasks</div>
+        <div><span style={{ color: COLORS.purple }}>Reasoning recommended</span> {'\u2014'} complex multi-step analysis, deep thinking tasks</div>
       </div>
 
       {/* ── Filter for recommended models ── */}

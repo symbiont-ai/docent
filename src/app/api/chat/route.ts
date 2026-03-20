@@ -8,8 +8,39 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Max function duration in seconds (Vercel Pro plan limit: 300s)
-export const maxDuration = 300;
+// Allow long-running streams (deep analysis can take 10+ minutes)
+export const maxDuration = 900; // 15 minutes — large presentations need extended streaming time
+
+// ── In-memory rate limiter for free-mode (server-key) requests ────
+// Tracks requests per IP with a sliding window. Resets every WINDOW_MS.
+const FREE_RATE_LIMIT = 20;          // max requests per window per IP
+const FREE_RATE_WINDOW_MS = 60 * 60_000; // 1 hour window
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function checkFreeRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  let bucket = rateBuckets.get(ip);
+  if (!bucket || now >= bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + FREE_RATE_WINDOW_MS };
+    rateBuckets.set(ip, bucket);
+  }
+  bucket.count++;
+  // Garbage-collect expired entries (max 1000 IPs tracked)
+  if (rateBuckets.size > 1000) {
+    for (const [key, val] of rateBuckets) {
+      if (now >= val.resetAt) rateBuckets.delete(key);
+    }
+  }
+  return {
+    allowed: bucket.count <= FREE_RATE_LIMIT,
+    remaining: Math.max(0, FREE_RATE_LIMIT - bucket.count),
+    resetAt: bucket.resetAt,
+  };
+}
+
+// Budget model enforced for free-mode users (keeps cost down)
+const FREE_MODE_MODEL = 'google/gemini-2.5-flash';
+const FREE_MODE_MAX_TOKENS = 16384; // enough for presentation generation (~10 slides)
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function translateMessages(messages: any[]): any[] {
@@ -52,13 +83,31 @@ export async function POST(request: NextRequest) {
     const { messages, model, max_tokens, system, options, stream, temperature } = body;
 
     // Get API key: from request header first, then env variable as fallback
-    const apiKey = request.headers.get('x-api-key') || process.env.OPENROUTER_API_KEY;
+    const clientKey = request.headers.get('x-api-key') || '';
+    const serverKey = process.env.OPENROUTER_API_KEY || '';
+    const usingFreeMode = !clientKey && !!serverKey;
+    const apiKey = clientKey || serverKey;
 
     if (!apiKey) {
       return NextResponse.json(
         { error: 'No API key provided. Please enter your OpenRouter API key in Settings.' },
         { status: 401 },
       );
+    }
+
+    // ── Free-mode rate limiting ──────────────────────────────
+    if (usingFreeMode) {
+      const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+        || request.headers.get('x-real-ip')
+        || 'unknown';
+      const rl = checkFreeRateLimit(ip);
+      if (!rl.allowed) {
+        const retryAfter = Math.ceil((rl.resetAt - Date.now()) / 1000);
+        return NextResponse.json(
+          { error: `Free tier rate limit reached (${FREE_RATE_LIMIT} requests/hour). Please add your own OpenRouter API key in Settings, or try again in ${Math.ceil(retryAfter / 60)} minutes.` },
+          { status: 429, headers: { 'Retry-After': String(retryAfter) } },
+        );
+      }
     }
 
     // Build OpenRouter request
@@ -75,9 +124,9 @@ export async function POST(request: NextRequest) {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const orBody: Record<string, any> = {
-      model: model || 'anthropic/claude-opus-4.6',
+      model: usingFreeMode ? FREE_MODE_MODEL : (model || 'anthropic/claude-opus-4.6'),
       messages: orMessages,
-      max_tokens: max_tokens || 4096,
+      max_tokens: usingFreeMode ? Math.min(max_tokens || 4096, FREE_MODE_MAX_TOKENS) : (max_tokens || 4096),
       stream: !!stream,
     };
 
@@ -108,9 +157,14 @@ export async function POST(request: NextRequest) {
       sort: 'throughput',
     };
 
-    // Forward client abort signal + server-side timeout (uses client-computed timeout, capped at 20 min)
+    // Forward client abort signal + server-side timeout.
+    // For streaming requests, the stall detector (below) is the real safety net —
+    // it resets on every chunk, so active streams survive indefinitely.
+    // The overall timeout here is only a backstop for non-streaming or pre-stream hangs.
     const controller = new AbortController();
-    const serverTimeout = Math.min(body.timeout || 5 * 60_000, 20 * 60_000);
+    const serverTimeout = stream
+      ? 30 * 60_000   // Streaming: 30 min hard cap (stall detector handles actual hangs)
+      : Math.min(body.timeout || 5 * 60_000, 10 * 60_000);  // Non-streaming: client-computed, capped at 10 min
     const timeoutId = setTimeout(() => controller.abort(), serverTimeout);
 
     // If the client disconnects, abort the upstream request too

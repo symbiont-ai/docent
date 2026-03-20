@@ -7,7 +7,7 @@
 import { callChat } from '@/src/lib/api';
 import { cropPdfFigure, resolveRegion, extractPageXObjects, xobjectToDataURL } from '@/src/lib/pdf-utils';
 import type { NativeXObject } from '@/src/lib/pdf-utils';
-import type { ExtractedFigure, ExtractionResult, LLMDocumentStructure } from '@/src/types';
+import type { ExtractedFigure, ExtractionResult } from '@/src/types';
 
 // ── Constants ────────────────────────────────────────────────
 
@@ -30,9 +30,8 @@ const SUPPLEMENTARY_MARKERS = [
   // labeled "Supplementary" material should be excluded.
   /\bsi\s+materials?\b/i,
   /\bsupplemental\s+(materials?|data|methods|figures)\b/i,
-  // NOTE: "Online Methods" and "Extended Data" are intentionally NOT included here.
-  // In Nature, Science, Cell, and many other journals, these appear after references
-  // but are core peer-reviewed content (detailed methods, additional main figures/tables).
+  /\bonline\s+methods\b/i,
+  /\bextended\s+data\b/i,
 ];
 
 /**
@@ -76,15 +75,13 @@ const REFERENCES_MARKERS = [
 // These terms can appear inside reference titles ("...Appendix of...", "Supplementary Table 3"),
 // so we only match them as section headers.
 const POST_REFERENCES_HEADER_MARKERS = [
-  /^\s*[A-Z]\s+(?:Appendix|Supplementary|Additional)/im,          // "A Appendix-A", "B Supplementary Results", etc.
+  /^\s*[A-Z]\s+(?:Appendix|Supplementary|Additional|Extended)/im, // "A Appendix-A", "B Supplementary Results", etc.
   /^\s*[A-Z]\.\d/m,                                                // Lettered subsections: "A.1", "B.2", "G.3", etc.
   /^\s*Appendix/im,                                                // "Appendix A", "Appendix"
   /^\s*Supplementary/im,                                           // "Supplementary Results/Materials"
   /^\s*Supporting\s+Information/im,                                // "Supporting Information"
   /^\s*Dataset\s+(?:Documentation|Card)/im,                        // Dataset documentation/cards
-  // NOTE: "Online Methods" and "Extended Data" are intentionally NOT included here.
-  // In Nature/Science/Cell, these are core peer-reviewed sections that appear after
-  // references but contain essential content (methods, additional main figures).
+  /^\s*(?:Online|Extended)\s+(?:Methods|Data)/im,                  // Online Methods, Extended Data
 ];
 
 // FULL-PAGE markers: can appear anywhere on a page (including mid-page after references).
@@ -272,18 +269,6 @@ COMMON MISTAKES:
 COMPLETENESS CHECK:
 Cross-reference your output against the checklist before responding. Every item MUST appear.
 
-DOCUMENT STRUCTURE DETECTION:
-Also analyze the document layout and identify where content sections begin.
-Add a "structure" field to your JSON output with these fields:
-- "main_content_end_page": Last page of core content that a presenter would need for slides.
-- "supplementary_start_page": First page of supplementary/non-essential material, or null if none found.
-Rules for determining content boundaries:
-- The main body, methods, results, and discussion are ALWAYS core content.
-- References/bibliography pages should be INCLUDED in main_content_end_page (they mark the end of the core paper).
-- For journal papers (Nature, Science, Cell, etc.): "Methods", "Online Methods", and "Extended Data" sections that appear after references are CORE content — do NOT treat them as supplementary.
-- For CS/ML conference papers (NeurIPS, ICML, ICLR, AAAI, ACL, etc.): "Appendix" sections after references typically contain supplementary proofs, ablations, and extra experiments — treat these as supplementary, NOT core content.
-- Explicitly labeled "Supplementary Information" or "Supplementary Materials" sections are ALWAYS supplementary.
-
 Output ONLY valid JSON:
 {
   "figures": [
@@ -301,14 +286,10 @@ Output ONLY valid JSON:
       "label": "Table 1",
       "description": "Classification of pooling methods by attention type"
     }
-  ],
-  "structure": {
-    "main_content_end_page": 12,
-    "supplementary_start_page": 13
-  }
+  ]
 }
 
-Sort figures by page number, then top-to-bottom.`;
+Sort by page number, then top-to-bottom.`;
 
 // ── Core extraction function ─────────────────────────────────
 
@@ -321,27 +302,24 @@ export async function extractFiguresFromPdf(
 ): Promise<ExtractionResult> {
   const extractedAt = Date.now();
 
-  // Detect document structure using regex as a fallback baseline.
-  // The LLM will also detect structure visually (see below) — its result takes precedence.
-  const regexStructure = detectMainContentEnd(textPages);
-  const totalPages = textPages.length;
+  // Detect document structure: main body + references boundary
+  // Only extract figures from main content pages (not appendix/supplementary)
+  const { mainContentEnd, referencesPage, postReferencesPage, totalPages } =
+    detectMainContentEnd(textPages);
+  const mainBodyEnd = Math.min(mainContentEnd, MAX_EXTRACTION_PAGES);
 
-  // Send ALL pages up to the cap — let the LLM see the full document and determine
-  // the true content boundary. Don't pre-filter based on regex which can be wrong
-  // for journals with non-standard layouts (Nature, Science, Cell, etc.).
-  const pagesToSend = Math.min(totalPages, MAX_EXTRACTION_PAGES);
+  const structureParts: string[] = [`pages 1-${mainBodyEnd}`];
+  if (referencesPage) structureParts.push(`references from page ${referencesPage}`);
+  if (postReferencesPage) structureParts.push(`post-references from page ${postReferencesPage} (excluded)`);
+  console.log(`[Extraction] Document structure: ${structureParts.join(', ')} (${totalPages} total pages)`);
 
-  const structureParts: string[] = [`sending ${pagesToSend} of ${totalPages} pages`];
-  if (regexStructure.referencesPage) structureParts.push(`references ~page ${regexStructure.referencesPage}`);
-  console.log(`[Extraction] Document scan: ${structureParts.join(', ')}`);
-
-  // Parse label hints from all pages we're sending (not just regex-detected main body)
-  const structuredHints = parseLabelHintsStructured(textPages, pagesToSend);
-  const labelHints = extractLabelHints(textPages, pagesToSend);
+  // Parse label hints: structured data for recovery, formatted string for prompt
+  const structuredHints = parseLabelHintsStructured(textPages, mainBodyEnd);
+  const labelHints = extractLabelHints(textPages, mainBodyEnd);
 
   // Resize thumbnails to 640px max for better Gemini bbox accuracy
   const extractionThumbs = await Promise.all(
-    thumbnails.slice(0, pagesToSend).map(t => t ? resizeForExtraction(t) : Promise.resolve('')),
+    thumbnails.slice(0, mainBodyEnd).map(t => t ? resizeForExtraction(t) : Promise.resolve('')),
   );
 
   // Build multi-image message — put checklist FIRST to prime the model
@@ -356,10 +334,10 @@ export async function extractFiguresFromPdf(
 
   contentBlocks.push({
     type: 'text',
-    text: `Analyze these ${pagesToSend} PDF page images. Find every checklist item above AND any additional visual elements. Output JSON only.`,
+    text: `Analyze these ${mainBodyEnd} PDF page images. Find every checklist item above AND any additional visual elements. Output JSON only.`,
   });
 
-  for (let i = 0; i < pagesToSend; i++) {
+  for (let i = 0; i < mainBodyEnd; i++) {
     if (extractionThumbs[i]) {
       contentBlocks.push({
         type: 'text',
@@ -393,16 +371,9 @@ export async function extractFiguresFromPdf(
   };
 
   const { content: raw } = await callChat(request, apiKey, signal);
-  const { figures: parsedFigures, structure: llmStructure } = parseExtractionResponse(raw);
-  let figures = parsedFigures;
+  let figures = parseExtractionResponse(raw);
 
-  // Determine effective content boundary: LLM structure > regex fallback
-  const effectiveMainEnd = llmStructure?.mainContentEndPage ?? regexStructure.mainContentEnd;
-  const effectiveSupplementaryStart = llmStructure?.supplementaryStartPage ?? (regexStructure.postReferencesPage || null);
-  console.log(`[Extraction] Content boundary: page ${effectiveMainEnd} (source: ${llmStructure ? 'LLM' : 'regex'})` +
-    (effectiveSupplementaryStart ? `, supplementary from page ${effectiveSupplementaryStart}` : ''));
-
-  console.log(`[Extraction] Found ${figures.length} visual elements across ${pagesToSend} pages (model: ${effectiveModel})`);
+  console.log(`[Extraction] Found ${figures.length} visual elements across ${mainBodyEnd} pages (model: ${effectiveModel})`);
   // Log each extracted figure for debugging bbox issues
   for (const fig of figures) {
     const r = fig.region;
@@ -543,85 +514,22 @@ export async function extractFiguresFromPdf(
     }
   }
 
-  // Post-filter: remove figures from supplementary pages (beyond the effective content boundary)
-  if (effectiveMainEnd < pagesToSend) {
-    const before = figures.length;
-    figures = figures.filter(f => f.page <= effectiveMainEnd);
-    if (figures.length < before) {
-      console.log(`[Extraction] Filtered ${before - figures.length} figure(s) from supplementary pages (>${effectiveMainEnd})`);
-      figures.forEach((f, i) => { f.id = `ef_${i + 1}`; });
-    }
-  }
-
   return {
     figures,
     model: effectiveModel,
     extractedAt,
-    mainBodyPages: effectiveMainEnd,
-    supplementaryStartPage: effectiveSupplementaryStart || undefined,
-    llmStructure: llmStructure || undefined,
+    mainBodyPages: mainBodyEnd,
+    supplementaryStartPage: postReferencesPage || undefined,
   };
 }
 
 // ── JSON parsing with repair ─────────────────────────────────
 
-/**
- * Attempt to repair truncated JSON by:
- * 1. Removing the last incomplete element (after the last comma in an array)
- * 2. Closing all open brackets/braces
- * Returns null if repair is not feasible.
- */
-function repairTruncatedJson(json: string): string | null {
-  // Find the figures array — we'll try to close it cleanly
-  // Strategy: find the last complete object (ends with }) and trim everything after
-  const lastCompleteObj = json.lastIndexOf('}');
-  if (lastCompleteObj === -1) return null;
-
-  let trimmed = json.substring(0, lastCompleteObj + 1);
-
-  // Count unclosed brackets and braces
-  let openBraces = 0;
-  let openBrackets = 0;
-  let inString = false;
-  let escape = false;
-
-  for (const ch of trimmed) {
-    if (escape) { escape = false; continue; }
-    if (ch === '\\') { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === '{') openBraces++;
-    else if (ch === '}') openBraces--;
-    else if (ch === '[') openBrackets++;
-    else if (ch === ']') openBrackets--;
-  }
-
-  // Close all open brackets and braces
-  // Brackets first (arrays), then braces (objects)
-  for (let i = 0; i < openBrackets; i++) trimmed += ']';
-  for (let i = 0; i < openBraces; i++) trimmed += '}';
-
-  return trimmed;
-}
-
-export interface ParsedExtractionResult {
-  figures: ExtractedFigure[];
-  structure?: LLMDocumentStructure;
-}
-
-export function parseExtractionResponse(raw: string): ParsedExtractionResult {
+export function parseExtractionResponse(raw: string): ExtractedFigure[] {
   // Extract JSON from markdown code blocks if present
   let jsonStr = raw;
   const jsonBlock = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (jsonBlock) {
-    jsonStr = jsonBlock[1];
-  } else {
-    // Handle truncated code blocks (LLM ran out of tokens before closing ```)
-    const openFence = raw.match(/^```(?:json)?\s*\n?/);
-    if (openFence) {
-      jsonStr = raw.slice(openFence[0].length);
-    }
-  }
+  if (jsonBlock) jsonStr = jsonBlock[1];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let parsed: any;
@@ -648,43 +556,14 @@ export function parseExtractionResponse(raw: string): ParsedExtractionResult {
       const end = jsonStr.lastIndexOf('}');
       if (start === -1 || end === -1) {
         console.error('[Extraction] No valid JSON found in response. Raw (first 500 chars):', jsonStr.slice(0, 500));
-        return { figures: [] };
+        return [];
       }
       try {
         parsed = JSON.parse(jsonStr.substring(start, end + 1));
       } catch {
-        // Last resort: try to repair truncated JSON by closing open brackets
-        const truncated = jsonStr.substring(start, end + 1);
-        const repaired = repairTruncatedJson(truncated);
-        if (repaired) {
-          try {
-            parsed = JSON.parse(repaired);
-            console.warn('[Extraction] Parsed response after truncated JSON repair');
-          } catch {
-            console.error('[Extraction] Failed to parse JSON response. Raw (first 500 chars):', jsonStr.slice(0, 500));
-            return { figures: [] };
-          }
-        } else {
-          console.error('[Extraction] Failed to parse JSON response. Raw (first 500 chars):', jsonStr.slice(0, 500));
-          return { figures: [] };
-        }
+        console.error('[Extraction] Failed to parse JSON response. Raw (first 500 chars):', jsonStr.slice(0, 500));
+        return [];
       }
-    }
-  }
-
-  // ── Extract LLM document structure ──
-  let structure: LLMDocumentStructure | undefined;
-  if (parsed?.structure && typeof parsed.structure === 'object') {
-    const s = parsed.structure;
-    const mainEnd = typeof s.main_content_end_page === 'number' ? s.main_content_end_page : null;
-    const suppStart = typeof s.supplementary_start_page === 'number' ? s.supplementary_start_page : null;
-    if (mainEnd && mainEnd > 0) {
-      structure = {
-        mainContentEndPage: mainEnd,
-        supplementaryStartPage: suppStart && suppStart > 0 ? suppStart : null,
-      };
-      console.log(`[Extraction] LLM document structure: main content ends at page ${mainEnd}` +
-        (suppStart ? `, supplementary starts at page ${suppStart}` : ', no supplementary detected'));
     }
   }
 
@@ -715,13 +594,13 @@ export function parseExtractionResponse(raw: string): ParsedExtractionResult {
 
   if (!parsed?.figures || !Array.isArray(parsed.figures)) {
     console.error('[Extraction] Response missing "figures" array');
-    return { figures: [], structure };
+    return [];
   }
 
   // Validate, clamp, sanity-check, and assign IDs
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const figures = parsed.figures as Array<any>;
-  const extractedFigures = figures
+  return figures
     .filter(f => {
       if (!f.page || f.page <= 0) return false;
       // Accept either box_2d (new Gemini native) or region (legacy)
@@ -761,7 +640,6 @@ export function parseExtractionResponse(raw: string): ParsedExtractionResult {
         description: f.description || `${f.kind} on page ${f.page}`,
       };
     });
-  return { figures: extractedFigures, structure };
 }
 
 function validateKind(kind: string): ExtractedFigure['kind'] {
@@ -1204,8 +1082,8 @@ async function recoverMissingElements(
       temperature: 0,
     }, apiKey, signal);
 
-    const { figures: recoveredFigures } = parseExtractionResponse(raw);
-    for (const fig of recoveredFigures) {
+    const parsed = parseExtractionResponse(raw);
+    for (const fig of parsed) {
       // If model returned a page not in our set, find closest match
       if (!byPage.has(fig.page)) {
         const hintForLabel = fig.label

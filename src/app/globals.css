@@ -2,6 +2,86 @@
    DOCENT — Global Styles
    ========================================================== */
 
+/* ---------- Theme: Dark (default) ---------- */
+:root {
+  --color-bg: #0F1419;
+  --color-surface: #1A2332;
+  --color-surface-hover: #1E293B;
+  --color-border: #2A3A4E;
+  --color-border-light: #3A4F66;
+  --color-text: #E8EAED;
+  --color-text-muted: #8B9DB6;
+  --color-text-dim: #5A6F87;
+  --color-accent: #D4A853;
+  --color-accent-light: #E8C97A;
+  --color-accent-bg: rgba(212, 168, 83, 0.08);
+  --color-accent-border: rgba(212, 168, 83, 0.25);
+  --color-accent-medium: rgba(212, 168, 83, 0.38);
+  --color-accent-strong: rgba(212, 168, 83, 0.56);
+  --color-accent-glow: rgba(212, 168, 83, 0.04);
+  --color-cyan: #5BB8D4;
+  --color-cyan-bg: rgba(91, 184, 212, 0.06);
+  --color-cyan-border: rgba(91, 184, 212, 0.25);
+  --color-cyan-border-light: rgba(91, 184, 212, 0.19);
+  --color-green: #6BC485;
+  --color-green-bg: rgba(107, 196, 133, 0.08);
+  --color-green-border: rgba(107, 196, 133, 0.25);
+  --color-red: #D46B6B;
+  --color-red-bg: rgba(212, 107, 107, 0.08);
+  --color-red-border: rgba(212, 107, 107, 0.25);
+  --color-red-medium: rgba(212, 107, 107, 0.38);
+  --color-purple: #A78BFA;
+  --color-purple-bg: rgba(167, 139, 250, 0.08);
+  --color-text-dim-bg: rgba(90, 111, 135, 0.08);
+  --color-text-dim-border: rgba(90, 111, 135, 0.25);
+  --color-text-dim-half: rgba(90, 111, 135, 0.31);
+  --color-surface-overlay: rgba(26, 35, 50, 0.88);
+  --color-bg-overlay: rgba(15, 20, 25, 0.50);
+  --color-user-bubble-bg: #1E3040;
+  --color-user-bubble-border: #2A4560;
+  --color-selection: rgba(212, 168, 83, 0.31);
+}
+
+/* ---------- Theme: Light ---------- */
+[data-theme="light"] {
+  --color-bg: #F8F9FA;
+  --color-surface: #FFFFFF;
+  --color-surface-hover: #F1F3F5;
+  --color-border: #DEE2E6;
+  --color-border-light: #E9ECEF;
+  --color-text: #1A1A2E;
+  --color-text-muted: #6B7280;
+  --color-text-dim: #9CA3AF;
+  --color-accent: #B8922E;
+  --color-accent-light: #D4A853;
+  --color-accent-bg: rgba(184, 146, 46, 0.08);
+  --color-accent-border: rgba(184, 146, 46, 0.25);
+  --color-accent-medium: rgba(184, 146, 46, 0.38);
+  --color-accent-strong: rgba(184, 146, 46, 0.56);
+  --color-accent-glow: rgba(184, 146, 46, 0.04);
+  --color-cyan: #2E8FAE;
+  --color-cyan-bg: rgba(46, 143, 174, 0.06);
+  --color-cyan-border: rgba(46, 143, 174, 0.25);
+  --color-cyan-border-light: rgba(46, 143, 174, 0.19);
+  --color-green: #3D8B5E;
+  --color-green-bg: rgba(61, 139, 94, 0.08);
+  --color-green-border: rgba(61, 139, 94, 0.25);
+  --color-red: #C04040;
+  --color-red-bg: rgba(192, 64, 64, 0.08);
+  --color-red-border: rgba(192, 64, 64, 0.25);
+  --color-red-medium: rgba(192, 64, 64, 0.38);
+  --color-purple: #7C3AED;
+  --color-purple-bg: rgba(124, 58, 237, 0.08);
+  --color-text-dim-bg: rgba(156, 163, 175, 0.08);
+  --color-text-dim-border: rgba(156, 163, 175, 0.25);
+  --color-text-dim-half: rgba(156, 163, 175, 0.31);
+  --color-surface-overlay: rgba(255, 255, 255, 0.88);
+  --color-bg-overlay: rgba(248, 249, 250, 0.50);
+  --color-user-bubble-bg: #E8EDF2;
+  --color-user-bubble-border: #D0D7E0;
+  --color-selection: rgba(184, 146, 46, 0.25);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -11,8 +91,8 @@
 html, body {
   height: 100%;
   overflow: hidden;
-  background-color: #0F1419;
-  color: #E8EAED;
+  background-color: var(--color-bg);
+  color: var(--color-text);
   font-family: 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
 }
 
@@ -27,12 +107,12 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2A3A4E;
+  background: var(--color-border);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3A4F66;
+  background: var(--color-border-light);
 }
 
 /* Animations */
@@ -52,8 +132,8 @@ html, body {
 
 /* Selection color */
 ::selection {
-  background: #D4A85350;
-  color: #E8EAED;
+  background: var(--color-selection);
+  color: var(--color-text);
 }
 
 /* Remove default button styles */
@@ -67,7 +147,8 @@ input:focus, textarea:focus, select:focus {
   outline: none;
 }
 
-/* Print styles */
+/* Print styles — hide app chrome, show only poster/slide content */
 @media print {
   body { margin: 0; }
+  .print-hide { display: none !important; }
 }

@@ -48,14 +48,17 @@ import type {
   AssessmentAnswer,
   AuditCheck,
   AuditResult,
+  PosterState,
 } from '@/src/types';
 import { callChat, callChatStream } from '@/src/lib/api';
 import type { TokenUsage } from '@/src/lib/api';
 import type { ModelOption } from '@/src/types';
-import { PRESENTATION_PROMPT, PRESENTATION_WORKFLOW, DEFAULT_MODEL, FALLBACK_MODELS, INTENT_META_INSTRUCTION, AUTHOR_MODE_PROMPT, JOURNAL_CLUB_PROMPT } from '@/src/lib/constants';
+import { getPresentationPrompt, PRESENTATION_WORKFLOW, DEFAULT_MODEL, FALLBACK_MODELS, INTENT_META_INSTRUCTION, AUTHOR_MODE_PROMPT, JOURNAL_CLUB_PROMPT, getPosterPrompt, POSTER_WORKFLOW } from '@/src/lib/constants';
 import {
   isPresentationIntent,
   extractPresentationJson,
+  isPosterIntent,
+  extractPosterJson,
   buildImageCatalog,
   cleanTextForSpeech,
   createIncrementalParseState,
@@ -264,6 +267,9 @@ export function useChat() {
   const [isAuditing, setIsAuditing] = useState(false);
   const [isDeepAnalyzing, setIsDeepAnalyzing] = useState(false);
 
+  // ── Poster state ────────────────────────────────────────
+  const [posterState, setPosterState] = useState<PosterState | null>(null);
+
 
   // ── File state ───────────────────────────────────────────
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -274,14 +280,34 @@ export function useChat() {
   const [showSettings, setShowSettings] = useState(false);
 
   // ── Voice/model state ────────────────────────────────────
-  const [voiceGender, setVoiceGender] = useState<VoiceGender>('female');
+  const [voiceGender, setVoiceGender] = useState<VoiceGender>(() => {
+    if (typeof window !== 'undefined') return (localStorage.getItem('docent_voiceGender') as VoiceGender) || 'female';
+    return 'female';
+  });
   const [autoVoice, setAutoVoice] = useState(false);
-  const [ttsEngine, setTTSEngine] = useState<TTSEngine>('browser');
-  const [googleApiKey, setGoogleApiKey] = useState('');
-  const [browserVoiceName, setBrowserVoiceName] = useState('');
+  const [ttsEngine, setTTSEngine] = useState<TTSEngine>(() => {
+    if (typeof window !== 'undefined') return (localStorage.getItem('docent_ttsEngine') as TTSEngine) || 'browser';
+    return 'browser';
+  });
+  const [googleApiKey, setGoogleApiKey] = useState(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('docent_googleApiKey') || '';
+    return '';
+  });
+  const [browserVoiceName, setBrowserVoiceName] = useState(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('docent_browserVoiceName') || '';
+    return '';
+  });
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL);
   const [extractionModel, setExtractionModel] = useState(EXTRACTION_MODEL);
   const [apiKey, setApiKey] = useState('');
+  const [freeMode, setFreeMode] = useState(false); // true when server has key & user has none
+  const [freeModeAvailable, setFreeModeAvailable] = useState(false); // server key exists
+
+  // Persist voice/TTS settings to localStorage
+  useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('docent_voiceGender', voiceGender); }, [voiceGender]);
+  useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('docent_ttsEngine', ttsEngine); }, [ttsEngine]);
+  useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('docent_googleApiKey', googleApiKey); }, [googleApiKey]);
+  useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('docent_browserVoiceName', browserVoiceName); }, [browserVoiceName]);
   const [availableModels, setAvailableModels] = useState<ModelOption[]>(FALLBACK_MODELS);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [maxOutputTokens, setMaxOutputTokens] = useState(16000);
@@ -322,6 +348,19 @@ export function useChat() {
     const storedBrowserVoice = localStorage.getItem('docent:browserVoiceName');
     if (storedBrowserVoice) setBrowserVoiceName(storedBrowserVoice);
   }, []);
+
+  // ── Check if server has an API key (free mode available) ──
+  useEffect(() => {
+    fetch('/api/free-status')
+      .then(r => r.json())
+      .then(d => { if (d.available) setFreeModeAvailable(true); })
+      .catch(() => {});
+  }, []);
+
+  // Derive free-mode: server key exists AND user has no key
+  useEffect(() => {
+    setFreeMode(freeModeAvailable && !apiKey);
+  }, [freeModeAvailable, apiKey]);
 
   // Persist API key changes
   useEffect(() => {
@@ -367,6 +406,7 @@ export function useChat() {
   // ── Fetch models from OpenRouter when API key changes ────
   useEffect(() => {
     if (!apiKey || !apiKey.startsWith('sk-or-')) {
+      // In free mode, still use fallback models (server picks the model anyway)
       setAvailableModels(FALLBACK_MODELS);
       return;
     }
@@ -375,9 +415,9 @@ export function useChat() {
     const fetchModels = async () => {
       setModelsLoading(true);
       try {
-        const res = await fetch('/api/models', {
-          headers: { 'x-api-key': apiKey },
-        });
+        const headers: Record<string, string> = {};
+        if (apiKey) headers['x-api-key'] = apiKey;
+        const res = await fetch('/api/models', { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled && data.models?.length > 0) {
@@ -494,7 +534,7 @@ You can save important observations, user preferences, and key findings using [N
       if (!plan) {
         prompt += `\n\n${PRESENTATION_WORKFLOW}`;
       }
-      prompt += `\n\n${PRESENTATION_PROMPT}`;
+      prompt += `\n\n${getPresentationPrompt()}`;
 
       // Mode-specific narrative stance
       if (plan) {
@@ -652,6 +692,21 @@ RULES:
 - If the user asks about "this figure" or "this slide" without a number, use the CURRENTLY VIEWING slide.`;
     }
 
+    // Detect poster intent — separate from presentation intent
+    const isPoster = isPosterIntent(userText, messages);
+    if (isPoster && !isPres) {
+      prompt += `\n\n${POSTER_WORKFLOW}`;
+      prompt += `\n\n${getPosterPrompt()}`;
+
+      // Include extracted figure catalog so the model can reference them
+      if (extractedFiguresRef.current && extractedFiguresRef.current.length > 0) {
+        const figCatalog = extractedFiguresRef.current.map(f =>
+          `- ${f.id}: ${f.kind} on page ${f.page}${f.label ? ` (${f.label})` : ''}: ${f.description}`
+        ).join('\n');
+        prompt += `\n\nEXTRACTED FIGURE CATALOG (use "extracted_ref" type with these IDs):\n${figCatalog}`;
+      }
+    }
+
     // Image catalog
     const { catalog, prompt: catalogPrompt } = buildImageCatalog(uploadedFiles, null);
     imageCatalogRef.current = catalog;
@@ -659,10 +714,10 @@ RULES:
       prompt += catalogPrompt;
     }
 
-    // When NOT a presentation, append intent meta-instruction so the model
-    // can signal [PRESENTATION_INTENT] for non-English presentation requests.
+    // When NOT a presentation or poster, append intent meta-instruction so the model
+    // can signal [PRESENTATION_INTENT] or [POSTER_INTENT] for non-English requests.
     // This has zero overhead for chat — the model just answers normally.
-    if (!isPres) {
+    if (!isPres && !isPoster) {
       prompt += INTENT_META_INSTRUCTION;
     }
 
@@ -673,14 +728,13 @@ RULES:
   // forcePresIntent overrides the keyword check (used after model-based intent detection).
   // extractedFiguresRef holds the result of Pass 1 extraction (populated in sendMessage, consumed in buildApiMessages)
   const extractedFiguresRef = useRef<ExtractedFigure[] | null>(null);
-  // LLM-detected document structure from extraction — persists across plan confirm → Pass 2
-  const llmStructureRef = useRef<{ mainContentEndPage: number; supplementaryStartPage: number | null } | null>(null);
 
   const buildApiMessages = useCallback((userText: string, forcePresIntent?: boolean): Array<{
     role: 'user' | 'assistant';
     content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
   }> => {
     const isPres = forcePresIntent ?? isPresentationIntent(userText, messages);
+    const isPoster = !isPres && isPosterIntent(userText, messages);
     const apiMessages: Array<{
       role: 'user' | 'assistant';
       content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
@@ -690,7 +744,7 @@ RULES:
     const hasPdf = pdf.pdfThumbnails.length > 0 || (pdf.pdfTextPages && pdf.pdfTextPages.length > 0);
     // Detect visual need early — also used to control history size (step 2)
     const needsVisual = hasPdf && (
-      isPres ||
+      isPres || isPoster ||
       /\b(figure|diagram|table|chart|image|graph|plot|illustration|photo|picture|visual|layout)\b/i.test(userText.toLowerCase())
     );
     if (hasPdf) {
@@ -701,7 +755,7 @@ RULES:
       // Check if Pass 1 extraction produced figures (set by sendMessage before calling buildApiMessages)
       const extractedFigures = extractedFiguresRef.current;
 
-      if (isPres && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
+      if ((isPres || isPoster) && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
         if (extractedFigures && extractedFigures.length > 0) {
           // ── Pass 2: Catalog-based presentation generation (cheap) ──
           // Send extracted figure catalog + compressed crop images + PDF text
@@ -729,13 +783,9 @@ RULES:
           }
 
           // Include PDF text: main body + references only (no appendix/supplementary/checklist)
-          // Prefer LLM-detected structure (handles Nature/Science/Cell layouts) over regex fallback.
-          const regexStructure = detectMainContentEnd(pdf.pdfTextPages);
-          const mainContentEnd = llmStructureRef.current
-            ? llmStructureRef.current.mainContentEndPage
-            : regexStructure.mainContentEnd;
-          const referencesPage = regexStructure.referencesPage;
-          const structureSource = llmStructureRef.current ? 'LLM' : 'regex';
+          // We send all main content without token budget truncation — modern models handle it fine.
+          const { mainContentEnd, referencesPage, postReferencesPage, totalPages: detectedPages } =
+            detectMainContentEnd(pdf.pdfTextPages);
 
           let textContent = `\nPDF Document Text (main body + references, ${mainContentEnd} of ${pdf.pdfTotalPages} pages):\n\n`;
           for (let i = 0; i < mainContentEnd; i++) {
@@ -755,11 +805,11 @@ RULES:
             sections.push(`  Content:        pages 1–${mainContentEnd}`);
             sections.push(`  References:     not detected`);
           }
-          if (mainContentEnd < pdf.pdfTotalPages) {
-            sections.push(`  Excluded:       pages ${mainContentEnd + 1}–${pdf.pdfTotalPages}`);
+          if (postReferencesPage) {
+            sections.push(`  Post-refs:      pages ${postReferencesPage}–${pdf.pdfTotalPages} (EXCLUDED)`);
           }
           console.log(
-            `[API] Pass 2 text sent to model (${structureSource}-detected boundary):\n` +
+            `[API] Pass 2 text sent to model:\n` +
             `  Pages sent:     1–${mainContentEnd} (${mainContentEnd} of ${pdf.pdfTotalPages} total)\n` +
             sections.join('\n') + '\n' +
             `  Text size:      ~${Math.round(textContent.length / 4)} tokens (${textContent.length} chars)`
@@ -769,7 +819,7 @@ RULES:
           apiMessages.push({ role: 'user' as const, content: catalogBlocks });
           apiMessages.push({
             role: 'assistant' as const,
-            content: `I've received the extracted figure catalog with ${extractedFigures.length} pre-identified visual elements, their cropped images, and the full paper text. I'll use "extracted_ref" to reference these figures when building slides.`,
+            content: `I've received the extracted figure catalog with ${extractedFigures.length} pre-identified visual elements, their cropped images, and the full paper text. I'll use "extracted_ref" to reference these figures when building ${isPoster ? 'the poster' : 'slides'}.`,
           });
           thumbnailsSentRef.current = true;
 
@@ -1042,9 +1092,16 @@ RULES:
           });
         }
       } else if (msg.sender === 'sage') {
+        // Strip bulky SVG content from old assistant messages to prevent OOM
+        // during Q&A. The slide text/titles/notes/references are preserved.
+        let text = msg.text;
+        if (!isPres) {
+          text = text.replace(/"content"\s*:\s*"<svg[^"]*"/g, '"content":"[SVG diagram]"');
+          text = text.replace(/'content'\s*:\s*'<svg[^']*'/g, "'content':'[SVG diagram]'");
+        }
         apiMessages.push({
           role: 'assistant' as const,
-          content: msg.text,
+          content: text,
         });
       }
     }
@@ -1592,6 +1649,14 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
     let presIntent = isPresentationIntent(text) && assessmentStateRef.current.phase === 'idle';
     presInProgressRef.current = presIntent;
 
+    // Poster intent — separate from presentation intent.
+    // Unlike presIntent, we DO check history here because the user's follow-up
+    // (e.g. "A0 landscape, for 3DV 2026") doesn't contain "poster" but the model
+    // will still respond with poster JSON. Only check history if no poster exists
+    // yet — once a poster is generated, follow-ups should go through normal chat.
+    const posterHistoryCtx = !posterState ? messages : undefined;
+    let posterIntent = !presIntent && isPosterIntent(text, posterHistoryCtx) && assessmentStateRef.current.phase === 'idle';
+
     // Auto-enable search for topic presentations (no PDF) and reflect it in the UI
     if (presIntent && !pdf.pdfDoc && !searchMode) {
       setSearchMode(true);
@@ -1640,7 +1705,7 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
       const detectedMode: PresentationMode = presIntent ? detectPresentationMode(text) : 'general';
       let activePlan: PresentationPlan | null = null;
 
-      if (presIntent && pdf.pdfDoc && pdf.pdfThumbnails.length > 0 && !thumbnailsSentRef.current) {
+      if ((presIntent || posterIntent) && pdf.pdfDoc && pdf.pdfThumbnails.length > 0) {
         try {
           setLoadingMsg('Analyzing paper structure and figures...');
           const extractionResult = await extractFiguresFromPdf(
@@ -1661,10 +1726,6 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
               pdf.figureCacheRef.current,
             );
             extractedFiguresRef.current = cropped;
-            // Persist LLM structure for Pass 2 (survives plan confirmation round-trip)
-            if (extractionResult.llmStructure) {
-              llmStructureRef.current = extractionResult.llmStructure;
-            }
             console.log(`[Extraction] Pass 1a complete: ${cropped.length} figures cropped`,
               extractionResult.supplementaryStartPage ? `| Supplementary starts at page ${extractionResult.supplementaryStartPage}` : '');
           } else {
@@ -1674,25 +1735,14 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
           // ── Pass 1b: Narrative planning (main model, with optional deep thinking) ──
           // The main model (user's selected model) plans the slide structure using
           // the figure catalog + paper text. Deep thinking is enabled if the user has it on.
+          // Skip for poster intent — poster doesn't need narrative arc planning.
           if (controller.signal.aborted) throw new Error('Aborted');
 
+          if (presIntent) {
           setLoadingMsg(deepThinking ? 'Planning presentation (thinking deeply)...' : 'Planning presentation structure...');
-          // Send full main content text to the planner.
-          // Prefer LLM-detected structure from extraction (handles Nature/Science/Cell layouts)
-          // over regex fallback (tuned for NeurIPS/ICML).
-          const regexPlanStructure = detectMainContentEnd(pdf.pdfTextPages);
-          const planMainEnd = extractionResult.llmStructure
-            ? extractionResult.llmStructure.mainContentEndPage
-            : regexPlanStructure.mainContentEnd;
-          const planStructure = extractionResult.llmStructure
-            ? {
-                mainContentEnd: extractionResult.llmStructure.mainContentEndPage,
-                referencesPage: regexPlanStructure.referencesPage, // regex is fine for refs
-                postReferencesPage: extractionResult.llmStructure.supplementaryStartPage,
-                totalPages: pdf.pdfTextPages.length,
-              }
-            : regexPlanStructure;
-          console.log(`[Planning] Using ${extractionResult.llmStructure ? 'LLM' : 'regex'}-detected structure: content ends at page ${planMainEnd}`);
+          // Send full main content text (main body + references) to the planner
+          const planStructure = detectMainContentEnd(pdf.pdfTextPages);
+          const planMainEnd = planStructure.mainContentEnd;
           const planTextPages = pdf.pdfTextPages.slice(0, planMainEnd);
           const textSummary = planTextPages.filter(Boolean).map((p, i) => `--- PAGE ${i + 1} ---\n${p}`).join('\n\n');
           console.log(`[Planning] Sending ${planMainEnd} pages (~${Math.round(textSummary.length / 4)} tokens) to planner`);
@@ -1771,12 +1821,13 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
             presInProgressRef.current = false;
             return; // ← Pipeline splits here. Pass 2 runs when user confirms.
           }
+          } // end if (presIntent) — skip planning for poster
         } catch (extractErr) {
           if (controller.signal.aborted) throw extractErr;
           console.warn('[Extraction/Planning] Pass 1 failed (will use thumbnail fallback):', extractErr);
           // Continue with fallback (thumbnails) — extractedFiguresRef stays null
         }
-        setLoadingMsg('Generating slides...');
+        setLoadingMsg(posterIntent ? 'Generating poster...' : 'Generating slides...');
       }
 
       // Build initial system prompt and messages.
@@ -1851,7 +1902,26 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
       const estimatedSlideCount = slideCountMatch ? parseInt(slideCountMatch[1], 10) : 15;
 
       try {
-        if (presIntent) {
+        if (posterIntent) {
+          // Poster intent — stream silently (don't show raw JSON in chat)
+          setLoadingMsg('Generating poster...');
+          const posterStreamStart = Date.now();
+
+          const posterStreamResult = await callChatStream(
+            chatRequest,
+            apiKey,
+            (_delta, _fullText) => {
+              lastActivityRef.current = Date.now();
+              const elapsed = Math.floor((Date.now() - posterStreamStart) / 1000);
+              const timer = elapsed > 60 ? `${Math.floor(elapsed / 60)}m ${(elapsed % 60).toString().padStart(2, '0')}s` : `${elapsed}s`;
+              setLoadingMsg(`Generating poster... (${timer})`);
+            },
+            controller.signal,
+          );
+          response = posterStreamResult.content;
+          if (posterStreamResult.finishReason) currentFinishReason = posterStreamResult.finishReason;
+          if (posterStreamResult.usage) { currentTokenUsage = posterStreamResult.usage; setLastTokenUsage(posterStreamResult.usage); }
+        } else if (presIntent) {
           // Mark presentation in progress for the activity-based timeout (3 min threshold vs 2 min)
           presInProgressRef.current = true;
           // Keywords matched — stream silently (don't show partial JSON), show progress %
@@ -1911,8 +1981,9 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
           if (result.finishReason) currentFinishReason = result.finishReason;
           if (result.usage) { currentTokenUsage = result.usage; setLastTokenUsage(result.usage); }
         } else {
-          // Keywords missed — stream live, but watch for [PRESENTATION_INTENT] marker
+          // Keywords missed — stream live, but watch for [PRESENTATION_INTENT] or [POSTER_INTENT] marker
           let intentDetected = false;
+          let posterIntentDetected = false;
           const intentController = new AbortController();
 
           // Link: if user cancels, also abort the intent stream
@@ -1926,10 +1997,16 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
               (_delta, fullText) => {
                 lastActivityRef.current = Date.now();
                 // Check first ~100 chars for the intent marker
-                if (!intentDetected && fullText.length <= 150) {
+                if (!intentDetected && !posterIntentDetected && fullText.length <= 150) {
                   if (fullText.includes('[PRESENTATION_INTENT]')) {
                     intentDetected = true;
                     // Abort this stream — we'll retry with full presentation prompt
+                    intentController.abort();
+                    return;
+                  }
+                  if (fullText.includes('[POSTER_INTENT]')) {
+                    posterIntentDetected = true;
+                    // Abort this stream — we'll retry with full poster prompt
                     intentController.abort();
                     return;
                   }
@@ -1973,20 +2050,14 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
                     extractedFiguresRef.current = await preCropExtractedFigures(
                       extractionResult.figures, pdf.pdfDoc, pdf.figureCacheRef.current,
                     );
-                    if (extractionResult.llmStructure) {
-                      llmStructureRef.current = extractionResult.llmStructure;
-                    }
                     console.log(`[Extraction] Pass 1a (retry): ${extractedFiguresRef.current.length} figures cropped`);
                   }
 
                   // Pass 1b: Narrative planning (main model)
-                  // Prefer LLM structure over regex fallback
-                  const retryRegexStructure = detectMainContentEnd(pdf.pdfTextPages);
+                  const retryPlanStructure = detectMainContentEnd(pdf.pdfTextPages);
                   if (!controller.signal.aborted) {
                     setLoadingMsg(deepThinking ? 'Planning presentation (thinking deeply)...' : 'Planning presentation structure...');
-                    const retryPlanMainEnd = extractionResult.llmStructure
-                      ? extractionResult.llmStructure.mainContentEndPage
-                      : retryRegexStructure.mainContentEnd;
+                    const retryPlanMainEnd = retryPlanStructure.mainContentEnd;
                     const retryPlanPages = pdf.pdfTextPages.slice(0, retryPlanMainEnd);
                     const textSummary = retryPlanPages.filter(Boolean).map((p, i) => `--- PAGE ${i + 1} ---\n${p}`).join('\n\n');
                     console.log(`[Planning] Retry: sending ${retryPlanMainEnd} pages (~${Math.round(textSummary.length / 4)} tokens) to planner`);
@@ -2018,14 +2089,6 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
 
                   // Author/JournalClub: surface plan and wait
                   if (retryMode !== 'general' && retryPlan && retryPlan.narrative_arc.length > 0) {
-                    const retryPlanStructure = extractionResult.llmStructure
-                      ? {
-                          mainContentEnd: extractionResult.llmStructure.mainContentEndPage,
-                          referencesPage: retryRegexStructure.referencesPage,
-                          postReferencesPage: extractionResult.llmStructure.supplementaryStartPage,
-                          totalPages: pdf.pdfTextPages.length,
-                        }
-                      : retryRegexStructure;
                     const planText = formatPlanForChat(
                       retryPlan.narrative_arc, retryPlan.paper_summary, retryPlan.figures, retryPlan.mode, retryPlanStructure,
                     );
@@ -2150,6 +2213,91 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
                 currentTokenUsage = null;
                 setLastTokenUsage(null);
               }
+            } else if (posterIntentDetected) {
+              // Expected abort — model signalled poster intent.
+              // Retry with full poster prompt.
+              console.log('[Intent] Model signalled [POSTER_INTENT] — retrying with poster prompt');
+
+              // Clear the streamed text from the thinking bubble
+              setMessages(prev => prev.map(m =>
+                m.isThinking ? { ...m, text: '' } : m
+              ));
+
+              setLoadingMsg('Generating poster...');
+
+              // Run figure extraction if we have a PDF (so poster can reference extracted figures)
+              if (pdf.pdfDoc && pdf.pdfThumbnails.length > 0 && !extractedFiguresRef.current) {
+                try {
+                  setLoadingMsg('Analyzing paper figures for poster...');
+                  const extractionResult = await extractFiguresFromPdf(
+                    pdf.pdfThumbnails, pdf.pdfTextPages, apiKey, controller.signal, extractionModel,
+                  );
+                  if (!controller.signal.aborted && extractionResult.figures.length > 0) {
+                    setLoadingMsg(`Cropping ${extractionResult.figures.length} figures...`);
+                    extractedFiguresRef.current = await preCropExtractedFigures(
+                      extractionResult.figures, pdf.pdfDoc, pdf.figureCacheRef.current,
+                    );
+                    console.log(`[Extraction] Pass 1a (poster retry): ${extractedFiguresRef.current.length} figures cropped`);
+                  }
+                } catch (exErr) {
+                  if (controller.signal.aborted) throw exErr;
+                  console.warn('[Extraction] Poster retry figure extraction failed:', exErr);
+                }
+                setLoadingMsg('Generating poster...');
+              }
+
+              // Rebuild with poster prompt
+              // We need to inject poster intent into the system prompt
+              let posterSystemPrompt = buildSystemPrompt(text, false);
+              // Force-append poster prompt if not already present
+              if (!posterSystemPrompt.includes('POSTERS:')) {
+                posterSystemPrompt += `\n\n${POSTER_WORKFLOW}`;
+                posterSystemPrompt += `\n\n${getPosterPrompt()}`;
+
+                // Include extracted figure catalog
+                if (extractedFiguresRef.current && extractedFiguresRef.current.length > 0) {
+                  const figCatalog = extractedFiguresRef.current.map(f =>
+                    `- ${f.id}: ${f.kind} on page ${f.page}${f.label ? ` (${f.label})` : ''}: ${f.description}`
+                  ).join('\n');
+                  posterSystemPrompt += `\n\nEXTRACTED FIGURE CATALOG (use "extracted_ref" type with these IDs):\n${figCatalog}`;
+                }
+              }
+
+              const posterApiMessages = buildApiMessages(text, false);
+              chatRequest = {
+                messages: posterApiMessages,
+                model: selectedModel,
+                max_tokens: maxTokens,
+                system: posterSystemPrompt,
+                timeout: requestTimeout,
+                options: {
+                  search: searchMode,
+                  thinking: deepThinking,
+                  thinkingBudget: deepThinking ? 10000 : undefined,
+                },
+              };
+
+              // Set posterIntent so post-response handling uses silent path
+              posterIntent = true;
+
+              const retryPosterStart = Date.now();
+              const posterResult = await callChatStream(
+                chatRequest,
+                apiKey,
+                (_delta, _fullText) => {
+                  lastActivityRef.current = Date.now();
+                  const elapsed = Math.floor((Date.now() - retryPosterStart) / 1000);
+                  const timer = elapsed > 60 ? `${Math.floor(elapsed / 60)}m ${(elapsed % 60).toString().padStart(2, '0')}s` : `${elapsed}s`;
+                  setLoadingMsg(`Generating poster... (${timer})`);
+                },
+                controller.signal,
+              );
+              response = posterResult.content;
+              if (posterResult.finishReason) currentFinishReason = posterResult.finishReason;
+              if (posterResult.usage) {
+                currentTokenUsage = posterResult.usage;
+                setLastTokenUsage(posterResult.usage);
+              }
             } else {
               // Real error — re-throw
               throw streamErr;
@@ -2162,7 +2310,7 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
         // If streaming failed for non-abort reason, fall back to non-streaming
         if (controller.signal.aborted) throw streamError;
         console.warn('Streaming failed, falling back to non-streaming:', streamError);
-        setLoadingMsg(presIntent ? 'Sage is creating your presentation...' : 'Sage is composing a response...');
+        setLoadingMsg(presIntent ? 'Sage is creating your presentation...' : posterIntent ? 'Generating poster...' : 'Sage is composing a response...');
         const fallbackResult = await callChat(chatRequest, apiKey, controller.signal);
         response = fallbackResult.content;
         if (fallbackResult.usage) { currentTokenUsage = fallbackResult.usage; setLastTokenUsage(fallbackResult.usage); }
@@ -2246,6 +2394,24 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
         }
       }
 
+      // 4b. Extract poster JSON if present (separate from presentations)
+      let extractedPosterData: PosterState | null = null;
+      if (!presResult && !presIntent) {
+        const posterResult = extractPosterJson(responseText);
+        if (posterResult) {
+          const { posterData, fullMatch } = posterResult;
+          extractedPosterData = posterData;
+          responseText = responseText.replace(fullMatch, '').trim();
+          if (!responseText) {
+            const cardCount = Object.keys(posterData.cards).length;
+            responseText = `Here's your poster: **${posterData.title}** with ${cardCount} sections across ${posterData.columns.length} columns. Switch to the Poster tab to view and edit it.`;
+          }
+          setPosterState(posterData);
+          setActiveTab('poster');
+          console.log(`[Poster] Parsed poster with ${Object.keys(posterData.cards).length} cards`);
+        }
+      }
+
       // Finalize streaming — unlock read-only mode
       if (presIntent) {
         presentation.finalizePresentation();
@@ -2273,6 +2439,8 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
       setMessages(finalMessages);
 
       // 8. Save session
+      // Use extractedPosterData (from this render cycle) if we just parsed a poster,
+      // because setPosterState() is async and posterState still holds the old value.
       await sessions.saveSession(
         finalMessages,
         sessions.currentSessionId || undefined,
@@ -2283,11 +2451,14 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
         currentTokenUsage,
         selectedModel,
         presentation.getNarrativeArc(),
+        undefined, // auditResults
+        extractedPosterData || posterState,
+        extractedFiguresRef.current,
       );
 
-      // 9. Auto-voice if enabled (chat uses browser TTS for reliability)
+      // 9. Auto-voice if enabled
       if (autoVoice && !presResult) {
-        tts.speakChat(responseText, undefined, detectedLang);
+        tts.speak(responseText, undefined, detectedLang);
       }
 
       // 10. Auto-offer assessment after 2+ Q&A messages post-presentation
@@ -2352,49 +2523,9 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
   const lastUserMsg = messages.filter(m => m.sender === 'user').pop()?.text || '';
   const autoSearchActive = isLoading && !searchMode && isPresentationIntent(lastUserMsg) && !pdf.pdfDoc;
 
-  // ── Auto-inject PDF title page on session restore ──────
-  // loadPresentation (generation-time) injects pdf_crop on the title slide,
-  // but older saved sessions or sessions saved before that step may lack it.
-  // This effect fires after React processes both pdfDoc and slides state updates.
-  useEffect(() => {
-    if (!pdf.pdfDoc || pdf.pdfTotalPages <= 0) return;
-    const ps = presentation.presentationRef.current;
-    if (ps.slides.length === 0) return;
-
-    const titleSlide = ps.slides[0];
-    // Only inject if the title slide has no figure (or is text_only with an SVG)
-    const needsInjection = !titleSlide.figure ||
-      titleSlide.layout === 'text_only' ||
-      (titleSlide.figure.type === 'svg');
-    if (!needsInjection) return;
-
-    const updatedSlides = [...ps.slides];
-    updatedSlides[0] = {
-      ...titleSlide,
-      layout: 'figure_focus' as const,
-      figure: {
-        type: 'pdf_crop' as const,
-        page: 1,
-        region: [0, 0, 1, 0.5],
-        label: 'Paper title page',
-      },
-    };
-    presentation.setPresentationState(prev => ({ ...prev, slides: updatedSlides }));
-  }, [pdf.pdfDoc, pdf.pdfTotalPages, presentation]);
-
   // ── Narrate a specific slide ───────────────────────────
   // Original behavior: speak ONLY the speaker notes, not title/bullets
-  // narrationTimerRef tracks the auto-advance setTimeout so we can cancel it
-  // to prevent multiple overlapping narration chains.
-  const narrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const narrateSlide = useCallback((slideIndex: number) => {
-    // Cancel any pending auto-advance timer to prevent duplicate narration chains
-    if (narrationTimerRef.current !== null) {
-      clearTimeout(narrationTimerRef.current);
-      narrationTimerRef.current = null;
-    }
-
     const ps = presentation.presentationRef.current;
     if (ps.slides.length === 0 || slideIndex < 0 || slideIndex >= ps.slides.length) return;
 
@@ -2410,10 +2541,7 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
       const current = presentation.presentationRef.current;
       if (current.autoAdvance && slideIndex < current.slides.length - 1) {
         presentation.navigateSlide(1);
-        narrationTimerRef.current = setTimeout(() => {
-          narrationTimerRef.current = null;
-          narrateSlide(slideIndex + 1);
-        }, 800);
+        setTimeout(() => narrateSlide(slideIndex + 1), 800);
       } else {
         // No more slides to advance to — end presentation mode
         presentation.setPresentationState(prev => ({ ...prev, isPresenting: false }));
@@ -2423,16 +2551,14 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
 
     const text = cleanTextForSpeech(slide.speakerNotes);
 
-    // onStarted: fires once the first chunk begins playing, so the audio pipeline
-    // is established and cross-slide prefetches won't starve it.
+    // onStarted: fires once the first chunk begins playing.
+    // Prefetch only the next slide (onAlmostDone handles the one after that)
     const onStarted = () => {
-      for (let ahead = 1; ahead <= 3; ahead++) {
-        const futureIdx = slideIndex + ahead;
-        if (futureIdx < ps.slides.length) {
-          const futureSlide = ps.slides[futureIdx];
-          if (futureSlide?.speakerNotes) {
-            tts.prefetchAudio(cleanTextForSpeech(futureSlide.speakerNotes));
-          }
+      const nextIdx = slideIndex + 1;
+      if (nextIdx < ps.slides.length) {
+        const nextSlide = ps.slides[nextIdx];
+        if (nextSlide?.speakerNotes) {
+          tts.prefetchAudio(cleanTextForSpeech(nextSlide.speakerNotes));
         }
       }
     };
@@ -2454,10 +2580,7 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
       if (current.autoAdvance && slideIndex < current.slides.length - 1) {
         presentation.navigateSlide(1);
         // Narrate next slide after a brief pause
-        narrationTimerRef.current = setTimeout(() => {
-          narrationTimerRef.current = null;
-          narrateSlide(slideIndex + 1);
-        }, 800);
+        setTimeout(() => narrateSlide(slideIndex + 1), 800);
       } else {
         // Narration complete — exit presentation mode
         presentation.setPresentationState(prev => ({ ...prev, isPresenting: false }));
@@ -2467,11 +2590,6 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
 
   // ── Stop narration ─────────────────────────────────────
   const stopNarration = useCallback(() => {
-    // Cancel any pending auto-advance timer first
-    if (narrationTimerRef.current !== null) {
-      clearTimeout(narrationTimerRef.current);
-      narrationTimerRef.current = null;
-    }
     tts.stopSpeaking();
     // Exit presentation mode when user stops narration
     presentation.setPresentationState(prev => ({ ...prev, isPresenting: false }));
@@ -2607,7 +2725,8 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
     setSelectedModel,
     setNarrativeContext: (arc: NarrativeArcEntry[]) => presentation.setNarrativeContext(arc, []),
     setAuditResults,
-  }), [presentation.setPresentationState, presentation.setNarrativeContext, pdf.setPdfPage, pdf.setPdfZoom, pdf.loadPdf, pdf.removePdf]);
+    setPosterState,
+  }), [presentation.setPresentationState, presentation.setNarrativeContext, pdf.setPdfPage, pdf.setPdfZoom, pdf.loadPdf, pdf.removePdf, setPosterState]);
 
   const wrappedLoadSession = useCallback(
     async (session: Parameters<typeof sessions.loadSession>[0]) => {
@@ -2667,8 +2786,11 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
       lastTokenUsage,
       selectedModel,
       presentation.getNarrativeArc(),
+      undefined, // auditResults
+      posterState,
+      extractedFiguresRef.current,
     );
-  }, [sessions, messages, uploadedFiles, presentation, pdf.pdfPage, pdf.pdfZoom, lastTokenUsage, selectedModel]);
+  }, [sessions, messages, uploadedFiles, presentation, pdf.pdfPage, pdf.pdfZoom, lastTokenUsage, selectedModel, posterState]);
 
   // ── Slide Audit ──────────────────────────────────────────
   // Keep a ref so we can pass the latest value to saveSession without stale closures
@@ -2777,65 +2899,21 @@ Rules:
 
       const narrativeArc = presentation.getNarrativeArc();
       console.log(`[Audit] Starting audit for slide ${slideIndex} "${slide.title}" | Arc: ${narrativeArc.length} entries | Figure: ${slide.figure?.type || 'none'} (extractedId: ${slide.figure?.extractedId || 'none'})`);
-      if (narrativeArc.length > 0) {
-        console.log(`[Audit] Arc dump: ${narrativeArc.map((e, i) => `[${i}] #${e.slide_number} "${e.title}"`).join(' | ')}`);
-      } else {
-        console.warn(`[Audit] ⚠️ NARRATIVE ARC IS EMPTY — plan matching will be skipped`);
-      }
 
-      // ── Detect structural (auto-generated) slides ──
-      // Title, Overview, References, and Closing slides are prescribed by the system prompt,
-      // not by the narrative arc. Skip the Slide ↔ Plan title check for these.
-      const titleLower = slide.title.toLowerCase().trim();
-      const isStructuralSlide =
-        slideIndex === 0 ||  // Title slide
-        titleLower === 'overview' ||  // Overview slide
-        /^(references|bibliography|sources|works cited|citations)$/i.test(titleLower) ||
-        /^(thank you|thanks|questions|q\s*&\s*a|the end|fin|end|thank you\s*[—–-]\s*questions\??)/i.test(titleLower);
-
-      // ── Check 4: Match slide to plan entry ──
-      // Strategy: position-first, title-fallback.
-      // Dynamically compute the content slide position by counting non-structural slides
-      // before this one, then map to the corresponding plan entry (1-indexed).
+      // ── Check 4: Mechanical figure ↔ plan match ──
+      // Find the plan entry for this slide. The narrative arc numbers content slides
+      // starting from 1, but the actual deck has a title slide auto-injected at index 0.
+      // So plan slide_number N → actual slideIndex N (with 1 injected title slide).
       let planEntry: NarrativeArcEntry | undefined;
-      if (narrativeArc.length > 0 && !isStructuralSlide) {
+      if (narrativeArc.length > 0) {
+        // Exact title match only — any title mismatch is itself a fabrication to flag
         const slideTitle = slide.title.toLowerCase().trim();
+        planEntry = narrativeArc.find(e => e.title.toLowerCase().trim() === slideTitle);
 
-        // 1. Positional match: count content (non-structural) slides before this one,
-        // then use that as an array index into the arc. This is more robust than matching
-        // by slide_number, because the arc array is always ordered and maps 1:1 to content slides.
-        const allSlides = presentation.presentationRef.current.slides;
-        let contentPosition = 0;
-        for (let i = 0; i < slideIndex; i++) {
-          const t = allSlides[i].title.toLowerCase().trim();
-          const structural = i === 0 || t === 'overview' ||
-            /^(references|bibliography|sources|works cited|citations)$/i.test(t) ||
-            /^(thank you|thanks|questions|q\s*&\s*a|the end|fin|end|thank you\s*[—–-]\s*questions\??)/i.test(t);
-          if (!structural) contentPosition++;
-        }
-        // Use array index (more robust than matching by slide_number which may vary)
-        const positionalMatch = contentPosition < narrativeArc.length ? narrativeArc[contentPosition] : undefined;
-        // Also try by slide_number for backwards compat
-        const expectedPlanNum = contentPosition + 1;
-        const numMatch = narrativeArc.find(e => e.slide_number === expectedPlanNum);
-
-        // 2. Exact title match
-        const titleMatch = narrativeArc.find(e => e.title.toLowerCase().trim() === slideTitle);
-
-        console.log(`[Audit] Slide ${slideIndex} "${slide.title}": contentPosition=${contentPosition}, arc[${contentPosition}]=${positionalMatch ? `"${positionalMatch.title}"` : 'OOB'}, expectedPlanNum=${expectedPlanNum}, numMatch=${numMatch ? `#${numMatch.slide_number}` : 'NONE'}, titleMatch=${titleMatch ? `#${titleMatch.slide_number}` : 'NONE'}`);
-        console.log(`[Audit] Arc (${narrativeArc.length} entries): [${narrativeArc.slice(0, 5).map((e, i) => `${i}:#${e.slide_number} "${e.title.slice(0, 30)}"`).join(', ')}${narrativeArc.length > 5 ? ', ...' : ''}]`);
-
-        if (titleMatch) {
-          planEntry = titleMatch;
-          console.log(`[Audit] Matched → plan #${planEntry.slide_number} "${planEntry.title}" (title match)`);
-        } else if (positionalMatch) {
-          planEntry = positionalMatch;
-          console.log(`[Audit] Matched → plan #${planEntry.slide_number} "${planEntry.title}" (positional: arc[${contentPosition}])`);
-        } else if (numMatch) {
-          planEntry = numMatch;
-          console.log(`[Audit] Matched → plan #${planEntry.slide_number} "${planEntry.title}" (slide_number match)`);
+        if (planEntry) {
+          console.log(`[Audit] Matched slide ${slideIndex} "${slide.title}" → plan #${planEntry.slide_number} "${planEntry.title}"`);
         } else {
-          console.warn(`[Audit] No match for slide ${slideIndex} "${slide.title}": contentPosition=${contentPosition}, arc has ${narrativeArc.length} entries`);
+          console.warn(`[Audit] Title mismatch: slide ${slideIndex} "${slide.title}" not found in plan (${narrativeArc.length} entries)`);
         }
       }
 
@@ -2851,7 +2929,6 @@ Rules:
         speakerNotes: slide.speakerNotes || '(none)',
         figure: hasFigure ? {
           type: slide.figure!.type,
-          extractedId: slide.figure!.extractedId || undefined,
           label: slide.figure!.label || '(none)',
           description: slide.figure!.description || '(none)',
           caption: slide.figure!.caption || '(none)',
@@ -2860,66 +2937,11 @@ Rules:
         layout: slide.layout || 'balanced',
       };
 
-      // ── Resolve ef_N → human-readable label ──
-      // Uses multiple sources (works even on session restore):
-      //   1. slide.figure.label — set during extracted_ref → pdf_crop resolution (always available)
-      //   2. planEntry.visual_need description — the text after "ef_N: " in the plan
-      //   3. extractedFiguresRef catalog — populated during generation (may be null on session restore)
-      const catalog = extractedFiguresRef.current || [];
-      const resolveEfLabel = (efId: string, slideLabel?: string, planVisualNeed?: string): string => {
-        if (slideLabel) return `${efId} (${slideLabel})`;
-        if (planVisualNeed) {
-          const afterId = planVisualNeed.replace(/^ef_\d+:\s*/, '');
-          if (afterId && afterId !== planVisualNeed) return `${efId} (${afterId})`;
-        }
-        const fig = catalog.find(f => f.id === efId);
-        if (fig?.label) return `${efId} (${fig.label})`;
-        return efId;
-      };
-
-      // Enrich the planned visual with human-readable label (e.g., "ef_12" → "ef_12 (Fig. 5g-h)")
-      // so the LLM audit sees the resolved name, not just the raw ID.
-      let enrichedVisual = planEntry?.visual_need || '(none specified)';
-      if (planEntry?.visual_need) {
-        const efRef = planEntry.visual_need.match(/^(ef_\d+)/);
-        if (efRef) {
-          // Try catalog first for the canonical figure label (e.g., "Fig. 5g-h")
-          const fig = catalog.find(f => f.id === efRef[1]);
-          const catalogLabel = fig?.label;
-          if (catalogLabel && !planEntry.visual_need.includes(catalogLabel)) {
-            // Catalog label not in visual_need — inject it (e.g., "ef_12: desc" → "ef_12 (Fig. 5g-h): desc")
-            enrichedVisual = planEntry.visual_need.replace(efRef[1], `${efRef[1]} (${catalogLabel})`);
-          }
-          // If catalog label already present or unavailable, visual_need is fine as-is
-        }
-      }
-
       const planData = planEntry ? {
         plannedTitle: planEntry.title,
         plannedPurpose: planEntry.purpose,
-        plannedVisual: enrichedVisual,
+        plannedVisual: planEntry.visual_need || '(none specified)',
       } : null;
-
-      // ── Mechanical Figure ↔ Plan check (extractedId match) ──
-
-      let figPlanMechanical: { checked: boolean; pass: boolean; detail: string } = { checked: false, pass: false, detail: '' };
-      if (hasFigure && planData && slide.figure?.extractedId && planEntry?.visual_need) {
-        const plannedRef = planEntry.visual_need.match(/^(ef_\d+)/);
-        if (plannedRef) {
-          const plannedId = plannedRef[1];
-          const actualId = slide.figure.extractedId;
-          // For actual figure: use the slide's own label (resolved during figure extraction)
-          // For planned figure: parse from visual_need description
-          const actualLabel = resolveEfLabel(actualId, slide.figure.label);
-          const plannedLabel = resolveEfLabel(plannedId, undefined, planEntry.visual_need);
-          if (actualId === plannedId) {
-            figPlanMechanical = { checked: true, pass: true, detail: `Correct figure: slide uses ${actualLabel} as planned.` };
-          } else {
-            figPlanMechanical = { checked: true, pass: false, detail: `Figure mismatch: plan specified ${plannedLabel} but slide uses ${actualLabel}.` };
-          }
-          console.log(`[Audit] Figure ID check: plan=${plannedLabel}, actual=${actualLabel} → ${figPlanMechanical.pass ? 'MATCH' : 'MISMATCH'}`);
-        }
-      }
 
       // Determine which checks to request from the LLM
       const checksToRun: string[] = [];
@@ -2928,9 +2950,7 @@ Rules:
         checksToRun.push('2: Speaker Notes ↔ Figure — Do the speaker notes describe or reference the figure on the slide?');
         checksToRun.push('3: Bullets ↔ Figure — Do the bullet points relate to the displayed figure?');
       }
-      if (hasFigure && !isSvg && planData && !figPlanMechanical.checked) {
-        // Only ask LLM for Figure ↔ Plan if we couldn't do a mechanical extractedId check
-        // and the figure is NOT an SVG (SVGs have their own check 5: SVG ↔ Plan)
+      if (hasFigure && planData) {
         checksToRun.push('4: Figure ↔ Plan — Is the displayed figure the one the plan specified for this slide? Check if the figure label/description matches the planned visual.');
       }
       if (isSvg && planData) {
@@ -2946,16 +2966,8 @@ Rules:
         skippedChecks.push({ id: 2, name: 'Notes ↔ Figure', pass: true, detail: 'Skipped: no figure on this slide.' });
         skippedChecks.push({ id: 3, name: 'Bullets ↔ Figure', pass: true, detail: 'Skipped: no figure on this slide.' });
         skippedChecks.push({ id: 4, name: 'Figure ↔ Plan', pass: true, detail: 'Skipped: no figure on this slide.' });
-      } else if (isSvg) {
-        // SVG slides use check 5 (SVG ↔ Plan) instead of check 4 (Figure ↔ Plan)
-        skippedChecks.push({ id: 4, name: 'Figure ↔ Plan', pass: true, detail: 'Skipped: synthesized SVG (see SVG ↔ Plan check instead).' });
-      } else if (figPlanMechanical.checked) {
-        // Mechanical extractedId check was performed — use its result directly
-        skippedChecks.push({ id: 4, name: 'Figure ↔ Plan', pass: figPlanMechanical.pass, detail: figPlanMechanical.detail });
       } else if (!planData) {
-        if (isStructuralSlide) {
-          skippedChecks.push({ id: 4, name: 'Figure ↔ Plan', pass: true, detail: 'Skipped: auto-generated structural slide.' });
-        } else if (hasArc) {
+        if (hasArc) {
           skippedChecks.push({ id: 4, name: 'Figure ↔ Plan', pass: false, detail: `Slide title "${slide.title}" does not match any planned slide title.` });
         } else {
           skippedChecks.push({ id: 4, name: 'Figure ↔ Plan', pass: true, detail: 'Skipped: no narrative arc available.' });
@@ -2964,11 +2976,10 @@ Rules:
       if (!isSvg || !planData) {
         skippedChecks.push({ id: 5, name: 'SVG ↔ Plan', pass: true, detail: !isSvg ? 'Skipped: figure is not SVG.' : 'Skipped: no plan entry found.' });
       }
-      if (isStructuralSlide) {
-        skippedChecks.push({ id: 6, name: 'Slide ↔ Plan', pass: true, detail: 'Skipped: auto-generated structural slide (not in narrative arc).' });
-      } else if (!planData && hasArc) {
+      if (!planData && hasArc) {
         skippedChecks.push({ id: 6, name: 'Slide ↔ Plan', pass: false, detail: `Slide title "${slide.title}" does not match any planned slide title.` });
-      } else if (!hasArc) {
+      }
+      if (!hasArc) {
         skippedChecks.push({ id: 6, name: 'Slide ↔ Plan', pass: true, detail: 'Skipped: no narrative arc available.' });
       }
 
@@ -3001,8 +3012,7 @@ Rules:
 - "pass" means no significant mismatch. Minor wording differences are fine.
 - "detail" should be specific: mention what mismatches or why it passes.
 - Be strict: if notes discuss something entirely different from the bullets, that's a fail.
-- For SVG checks, assess whether the SVG's apparent content matches the plan's visual description.
-- IMPORTANT: "ef_N" identifiers (e.g. ef_12) in the plan are internal IDs that map to figure labels. If the slide's figure has extractedId "ef_12" and label "Fig. 5g-h", the plan's visual "ef_12: Fig. 5g-h — ..." refers to that SAME figure. Do NOT flag ef_N vs figure-label as a mismatch — they are equivalent.`;
+- For SVG checks, assess whether the SVG's apparent content matches the plan's visual description.`;
 
       const { content: rawResponse } = await callChat({
         messages: [{ role: 'user', content: 'Audit this slide.' }],
@@ -3075,11 +3085,7 @@ Rules:
 
     try {
       // Build paper text — only main body + references, exclude supplementary
-      // Prefer LLM-detected structure over regex fallback
-      const deepRegex = detectMainContentEnd(pdf.pdfTextPages);
-      const mainContentEnd = llmStructureRef.current
-        ? llmStructureRef.current.mainContentEndPage
-        : deepRegex.mainContentEnd;
+      const { mainContentEnd } = detectMainContentEnd(pdf.pdfTextPages);
       let paperText = '';
       for (let i = 0; i < mainContentEnd && i < pdf.pdfTextPages.length; i++) {
         if (pdf.pdfTextPages[i]) {
@@ -3219,6 +3225,7 @@ Rules:
     setVoiceGender,
     apiKey,
     setApiKey,
+    freeMode,
     selectedModel,
     setSelectedModel,
     availableModels,
@@ -3253,7 +3260,6 @@ Rules:
     isSpeaking: tts.isSpeaking,
     isLoadingAudio: tts.isLoadingAudio,
     speak: tts.speak,
-    speakChat: tts.speakChat,
     stopSpeaking: tts.stopSpeaking,
 
     // ── Sidebar / Sessions (flattened from useSessions) ──
@@ -3304,6 +3310,11 @@ Rules:
     // ── Export ──
     exportHtml,
     setExportHtml,
+
+    // ── Poster ──
+    posterState,
+    setPosterState,
+    extractedFigures: extractedFiguresRef.current || presentation.getExtractedFigures(),
 
     // ── Misc ──
     messagesEndRef,

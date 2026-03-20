@@ -77,7 +77,13 @@ export const svgToDataURL = (svgContent: string): Promise<string | null> => {
       const renderW = 1920;
       const renderH = 1080;
 
-      // Render an image source URL onto a canvas and return as PNG data URL
+      // Detect theme for canvas background
+      const isDark = typeof document !== 'undefined'
+        ? document.documentElement.getAttribute('data-theme') !== 'light'
+        : true;
+      const canvasBg = isDark ? '#1A2332' : '#FFFFFF';
+
+      // Render an image source URL onto a canvas and return as JPEG data URL
       const renderToCanvas = (imgSrc: string): Promise<string | null> => {
         return new Promise((res) => {
           const img = new Image();
@@ -87,7 +93,7 @@ export const svgToDataURL = (svgContent: string): Promise<string | null> => {
               canvas.width = renderW;
               canvas.height = renderH;
               const ctx = canvas.getContext('2d')!;
-              ctx.fillStyle = '#1A2332';
+              ctx.fillStyle = canvasBg;
               ctx.fillRect(0, 0, renderW, renderH);
               const natW = img.naturalWidth || renderW;
               const natH = img.naturalHeight || renderH;
@@ -95,7 +101,11 @@ export const svgToDataURL = (svgContent: string): Promise<string | null> => {
               const x = (renderW - natW * scale) / 2;
               const y = (renderH - natH * scale) / 2;
               ctx.drawImage(img, x, y, natW * scale, natH * scale);
-              res(canvas.toDataURL('image/png'));
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+              // Release canvas GPU/memory immediately
+              canvas.width = 0;
+              canvas.height = 0;
+              res(dataUrl);
             } catch (e) {
               console.warn('[PPTX] Canvas draw failed:', e);
               res(null);
@@ -119,14 +129,18 @@ export const svgToDataURL = (svgContent: string): Promise<string | null> => {
           canvas.width = renderW;
           canvas.height = renderH;
           const ctx = canvas.getContext('2d')!;
-          ctx.fillStyle = '#1A2332';
+          ctx.fillStyle = canvasBg;
           ctx.fillRect(0, 0, renderW, renderH);
           const scale = Math.min(renderW / bitmap.width, renderH / bitmap.height) * 0.9;
           const x = (renderW - bitmap.width * scale) / 2;
           const y = (renderH - bitmap.height * scale) / 2;
           ctx.drawImage(bitmap, x, y, bitmap.width * scale, bitmap.height * scale);
           bitmap.close();
-          return canvas.toDataURL('image/png');
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          // Release canvas GPU/memory immediately
+          canvas.width = 0;
+          canvas.height = 0;
+          return dataUrl;
         } catch (e) {
           console.warn('[PPTX] createImageBitmap failed:', e);
           return null;
@@ -326,8 +340,15 @@ export const generateExportHTML = (
 const getImageDimensions = (dataURL: string): Promise<{ width: number; height: number } | null> => {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-    img.onerror = () => resolve(null);
+    img.onload = () => {
+      const dims = { width: img.naturalWidth, height: img.naturalHeight };
+      img.src = ''; // Release image memory
+      resolve(dims);
+    };
+    img.onerror = () => {
+      img.src = ''; // Release image memory
+      resolve(null);
+    };
     img.src = dataURL;
   });
 };
@@ -433,7 +454,8 @@ export const exportPresentationPPTX = async (
   for (let idx = 0; idx < slides.length; idx++) {
     const slideData = slides[idx];
     onProgress(`Building PPTX slide ${idx + 1}/${slides.length}...`);
-    await new Promise(r => setTimeout(r, 0));
+    // Yield to event loop every slide; longer pause every 5 slides for GC
+    await new Promise(r => setTimeout(r, idx % 5 === 4 ? 200 : 10));
 
     const pSlide = pres.addSlide();
     pSlide.background = { fill: BG };
@@ -574,7 +596,8 @@ export const exportPresentationPPTX = async (
       }
     }
 
-    if (speakerNotesVisible && slideData.speakerNotes) {
+    // Always include speaker notes in PPTX (regardless of UI visibility toggle)
+    if (slideData.speakerNotes) {
       pSlide.addNotes(slideData.speakerNotes);
     }
 

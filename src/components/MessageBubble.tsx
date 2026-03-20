@@ -76,12 +76,12 @@ export default function MessageBubble({ message, onSpeak, isSpeaking }: MessageB
     ? COLORS.accentBg
     : sender === 'system'
       ? COLORS.cyanBg
-      : '#2A3A4E';
+      : COLORS.border;
 
   const avatarBorder = sender === 'sage'
     ? COLORS.accentBorder
     : sender === 'system'
-      ? '#5BB8D440'
+      ? COLORS.cyanBorder
       : COLORS.border;
 
   const avatarEmoji = sender === 'sage'
@@ -92,15 +92,15 @@ export default function MessageBubble({ message, onSpeak, isSpeaking }: MessageB
 
   // --- Bubble ---
   const bubbleBg = sender === 'user'
-    ? '#1E3040'
+    ? COLORS.userBubbleBg
     : sender === 'system'
       ? COLORS.cyanBg
       : COLORS.surface;
 
   const bubbleBorder = sender === 'user'
-    ? '#2A4560'
+    ? COLORS.userBubbleBorder
     : sender === 'system'
-      ? '#5BB8D420'
+      ? COLORS.cyanBg
       : COLORS.border;
 
   const textColor = sender === 'system' ? COLORS.cyan : COLORS.text;

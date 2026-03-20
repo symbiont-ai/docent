@@ -19,6 +19,19 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
   const geminiAbortRef = useRef<AbortController | null>(null);
   const prefetchBufferRef = useRef<Map<string, Promise<string>>>(new Map());
   const prefetchAbortRefs = useRef<Set<AbortController>>(new Set());
+  const lastVoiceGenderRef = useRef(voiceGender);
+
+  // Clear prefetch cache when voice gender changes to avoid wrong-voice audio
+  useEffect(() => {
+    if (lastVoiceGenderRef.current !== voiceGender) {
+      lastVoiceGenderRef.current = voiceGender;
+      // Abort all pending prefetches
+      for (const ctrl of prefetchAbortRefs.current) ctrl.abort();
+      prefetchAbortRefs.current.clear();
+      prefetchBufferRef.current.clear();
+      console.log(`[Gemini TTS] Voice gender changed to "${voiceGender}" — cleared prefetch cache`);
+    }
+  }, [voiceGender]);
 
   // Preload browser voices on mount
   useEffect(() => {
@@ -126,18 +139,11 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
 
   // ── Gemini TTS (Google AI API) with look-ahead prefetch ──
   const speakGemini = useCallback((text: string, onEnd?: () => void, _lang?: string, onAlmostDone?: () => void, onStarted?: () => void) => {
-    // Stop any currently-playing audio before starting new speech
-    // (prevents orphaned HTMLAudioElements from continuing to play)
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current = null;
-    }
-
     const gen = ++generationRef.current;
     const cleaned = cleanTextForSpeech(text);
     const chunks = chunkTextForGemini(cleaned);
     const voiceName = GEMINI_VOICE_GENDER[voiceGender] || GEMINI_VOICE_GENDER.female;
+    console.log(`[Gemini TTS] speakGemini — gender="${voiceGender}" voice="${voiceName}" chunks=${chunks.length}`);
 
     setIsSpeaking(true);
     setIsLoadingAudio(true);
@@ -174,6 +180,12 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
 
         setIsLoadingAudio(false);
 
+        // Cap prefetch buffer to prevent unbounded memory growth
+        if (prefetchBufferRef.current.size > 5) {
+          const oldestKey = prefetchBufferRef.current.keys().next().value;
+          if (oldestKey) prefetchBufferRef.current.delete(oldestKey);
+        }
+
         // Prefetch next chunk while this one plays
         if (index + 1 < chunks.length && !prefetchBufferRef.current.has(chunks[index + 1])) {
           const prefetchController = new AbortController();
@@ -189,22 +201,39 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
           onAlmostDone?.();
         }
 
-        const audio = new Audio(`data:audio/wav;base64,${audioBase64}`);
+        // Release previous audio element to free memory
+        // IMPORTANT: null out event handlers FIRST to prevent onerror from firing
+        // when we clear src (which would skip slides)
+        if (audioRef.current) {
+          audioRef.current.onended = null;
+          audioRef.current.onerror = null;
+          audioRef.current.pause();
+          const oldSrc = audioRef.current.src;
+          if (oldSrc.startsWith('blob:')) URL.revokeObjectURL(oldSrc);
+          audioRef.current.src = '';
+          audioRef.current.load();
+        }
+
+        // Convert base64 to blob URL to allow immediate release of the base64 string
+        const binaryStr = atob(audioBase64);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+        const audioBlob = new Blob([bytes], { type: 'audio/wav' });
+        const audioBlobUrl = URL.createObjectURL(audioBlob);
+        audioBase64 = ''; // Release the large base64 string from memory
+
+        const audio = new Audio(audioBlobUrl);
         audioRef.current = audio;
 
-        // Guard against both onended and onerror firing for the same chunk
-        let chunkAdvanced = false;
-
         audio.onended = () => {
-          if (chunkAdvanced || gen !== generationRef.current) return;
-          chunkAdvanced = true;
-          // No delay needed — next chunk is already prefetched
+          URL.revokeObjectURL(audioBlobUrl);
+          if (gen !== generationRef.current) return;
           playChunk(index + 1);
         };
 
         audio.onerror = () => {
-          if (chunkAdvanced || gen !== generationRef.current) return;
-          chunkAdvanced = true;
+          URL.revokeObjectURL(audioBlobUrl);
+          if (gen !== generationRef.current) return;
           console.warn('[Gemini TTS] Audio playback error on chunk', index);
           playChunk(index + 1);
         };
@@ -224,10 +253,17 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
       } catch (err) {
         if (gen !== generationRef.current) return;
 
-        // On error, fall back to browser TTS for remaining text
-        console.warn('[Gemini TTS] Error, falling back to browser TTS:', err);
+        // On error, skip the failed chunk and continue with Gemini voice
+        // (never fall back to browser TTS — it changes the voice mid-narration)
+        console.warn('[Gemini TTS] Error on chunk', index, '— skipping:', err);
         setIsLoadingAudio(false);
-        speakBrowser(chunks.slice(index).join(' '), onEnd, _lang);
+        if (index + 1 < chunks.length) {
+          playChunk(index + 1);
+        } else {
+          // Last chunk failed — end narration cleanly
+          setIsSpeaking(false);
+          onEnd?.();
+        }
       }
     };
 
@@ -261,10 +297,15 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
       speechSynthesis.cancel();
     }
 
-    // Stop Gemini audio
+    // Stop Gemini audio and release memory
     if (audioRef.current) {
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
       audioRef.current.pause();
-      audioRef.current.currentTime = 0;
+      const src = audioRef.current.src;
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+      audioRef.current.src = '';
+      audioRef.current.load();
       audioRef.current = null;
     }
 
@@ -287,7 +328,7 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
     setIsLoadingAudio(false);
   }, []);
 
-  // ── Unified speak (used by presentation narration — respects TTS engine setting) ──
+  // ── Unified speak ──
   const speak = useCallback((text: string, onEnd?: () => void, lang?: string, onAlmostDone?: () => void, onStarted?: () => void) => {
     if (ttsEngine === 'gemini' && googleApiKey) {
       speakGemini(text, onEnd, lang, onAlmostDone, onStarted);
@@ -300,54 +341,5 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
     }
   }, [ttsEngine, googleApiKey, speakGemini, speakBrowser]);
 
-  // ── Chat speak (always browser TTS, defaults to Google UK English Female) ──
-  const speakChat = useCallback((text: string, onEnd?: () => void, lang?: string) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-
-    speechSynthesis.cancel();
-
-    const gen = ++generationRef.current;
-    const cleaned = cleanTextForSpeech(text);
-    const chunks = chunkText(cleaned);
-    const config = VOICE_CONFIG[voiceGender] || VOICE_CONFIG.female;
-
-    // Prefer Google UK English Female for chat; fall back to user pick or any English voice
-    const voices = speechSynthesis.getVoices();
-    const targetLang = lang || 'en';
-    const langBase = targetLang.split('-')[0];
-    const chatVoice =
-      voices.find(v => v.name === 'Google UK English Female') ||
-      (browserVoiceName ? voices.find(v => v.name === browserVoiceName) : null) ||
-      voices.find(v => v.lang.startsWith(langBase)) ||
-      voices[0] || null;
-
-    setIsSpeaking(true);
-
-    const speakChunk = (index: number) => {
-      if (gen !== generationRef.current) { setIsSpeaking(false); return; }
-      if (index >= chunks.length) { setIsSpeaking(false); onEnd?.(); return; }
-
-      const utterance = new SpeechSynthesisUtterance(chunks[index]);
-      if (lang) utterance.lang = lang;
-      if (chatVoice) utterance.voice = chatVoice;
-      utterance.pitch = config.pitch;
-      utterance.rate = config.rate;
-
-      utterance.onend = () => {
-        if (gen !== generationRef.current) { setIsSpeaking(false); return; }
-        setTimeout(() => speakChunk(index + 1), 80);
-      };
-      utterance.onerror = () => {
-        if (gen !== generationRef.current) return;
-        setIsSpeaking(false);
-        onEnd?.();
-      };
-
-      speechSynthesis.speak(utterance);
-    };
-
-    speakChunk(0);
-  }, [voiceGender, browserVoiceName]);
-
-  return { isSpeaking, isLoadingAudio, voicesReady, speak, speakChat, stopSpeaking, prefetchAudio };
+  return { isSpeaking, isLoadingAudio, voicesReady, speak, stopSpeaking, prefetchAudio };
 }

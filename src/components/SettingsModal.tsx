@@ -2,8 +2,15 @@
 
 import React, { useState, useEffect } from 'react';
 import { COLORS } from '@/src/lib/colors';
+import { getStoredTheme, applyTheme, onSystemThemeChange, type ThemeChoice } from '@/src/lib/theme';
 import ModelPicker from './ModelPicker';
 import type { VoiceGender, TTSEngine, ModelOption } from '@/src/types';
+
+const THEME_OPTIONS: { value: ThemeChoice; label: string; icon: string }[] = [
+  { value: 'dark', label: 'Dark', icon: '\u{1F319}' },
+  { value: 'light', label: 'Light', icon: '\u2600' },
+  { value: 'system', label: 'System', icon: '\u{1F4BB}' },
+];
 
 interface SettingsModalProps {
   show: boolean;
@@ -28,6 +35,7 @@ interface SettingsModalProps {
   modelMaxTokens: number;
   extractionModel: string;
   setExtractionModel: (v: string) => void;
+  freeMode?: boolean;
 }
 
 const EXTRACTION_MODELS = [
@@ -89,11 +97,30 @@ export default function SettingsModal({
   modelMaxTokens,
   extractionModel,
   setExtractionModel,
+  freeMode,
 }: SettingsModalProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGoogleKey, setShowGoogleKey] = useState(false);
   const [systemVoices, setSystemVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [theme, setTheme] = useState<ThemeChoice>('dark');
   const tokenPresets = buildTokenPresets(modelMaxTokens);
+
+  // Load stored theme on mount + listen for system preference changes
+  useEffect(() => {
+    setTheme(getStoredTheme());
+  }, []);
+
+  useEffect(() => {
+    if (theme !== 'system') return;
+    return onSystemThemeChange((resolved) => {
+      document.documentElement.setAttribute('data-theme', resolved);
+    });
+  }, [theme]);
+
+  const handleThemeChange = (choice: ThemeChoice) => {
+    setTheme(choice);
+    applyTheme(choice);
+  };
 
   // Enumerate available system voices
   useEffect(() => {
@@ -144,6 +171,34 @@ export default function SettingsModal({
           >
             Done
           </button>
+        </div>
+
+        {/* Theme */}
+        <div style={{ marginBottom: '20px' }}>
+          <label style={{
+            fontSize: '13px', color: COLORS.textMuted, display: 'block',
+            marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
+          }}>
+            Theme
+          </label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {THEME_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => handleThemeChange(opt.value)}
+                style={{
+                  flex: 1, padding: '10px', borderRadius: '8px', cursor: 'pointer',
+                  border: `1px solid ${theme === opt.value ? COLORS.accent : COLORS.border}`,
+                  backgroundColor: theme === opt.value ? COLORS.accentBg : 'transparent',
+                  color: theme === opt.value ? COLORS.accent : COLORS.textMuted,
+                  fontSize: '13px', fontWeight: 500,
+                  fontFamily: 'system-ui, sans-serif',
+                }}
+              >
+                {opt.icon} {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Sage's Voice — gender buttons for Gemini, voice picker for Browser */}
@@ -213,7 +268,7 @@ export default function SettingsModal({
             fontSize: '13px', color: COLORS.textMuted, display: 'block',
             marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
           }}>
-            TTS Engine for Presentation Narration
+            TTS Engine
           </label>
           <div style={{ display: 'flex', gap: '8px' }}>
             {TTS_ENGINE_OPTIONS.map(opt => (
@@ -334,113 +389,131 @@ export default function SettingsModal({
               {showApiKey ? 'Hide' : 'Show'}
             </button>
           </div>
-        </div>
-
-        {/* Max Output Tokens */}
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{
-            fontSize: '13px', color: COLORS.textMuted, display: 'block',
-            marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
-          }}>
-            Max Output Tokens
-            <span style={{
-              float: 'right', color: COLORS.accent, fontWeight: 600,
+          {freeMode && (
+            <div style={{
+              marginTop: '8px', padding: '8px 12px', borderRadius: '6px',
+              backgroundColor: 'rgba(34,211,238,0.08)', border: '1px solid rgba(34,211,238,0.2)',
+              fontSize: '12px', color: '#22d3ee', fontFamily: 'system-ui, sans-serif',
+              lineHeight: '1.4',
             }}>
-              {(maxOutputTokens / 1000).toFixed(0)}K
-            </span>
-          </label>
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-            {tokenPresets.map(preset => (
-              <button
-                key={preset.value}
-                onClick={() => setMaxOutputTokens(preset.value)}
-                style={{
-                  flex: 1, padding: '8px', borderRadius: '8px', cursor: 'pointer',
-                  border: `1px solid ${maxOutputTokens === preset.value ? COLORS.accent : COLORS.border}`,
-                  backgroundColor: maxOutputTokens === preset.value ? COLORS.accentBg : 'transparent',
-                  color: maxOutputTokens === preset.value ? COLORS.accent : COLORS.textMuted,
-                  fontSize: '13px', fontWeight: 500,
-                  fontFamily: 'system-ui, sans-serif',
-                }}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-          <input
-            type="range"
-            min={4000}
-            max={modelMaxTokens}
-            step={1000}
-            value={Math.min(maxOutputTokens, modelMaxTokens)}
-            onChange={e => setMaxOutputTokens(parseInt(e.target.value, 10))}
-            style={{
-              width: '100%', accentColor: COLORS.accent,
-              cursor: 'pointer',
-            }}
-          />
-          <div style={{
-            display: 'flex', justifyContent: 'space-between',
-            fontSize: '11px', color: COLORS.textDim, marginTop: '2px',
-            fontFamily: 'system-ui, sans-serif',
-          }}>
-            <span>4K (less credits needed)</span>
-            <span>{Math.round(modelMaxTokens / 1000)}K (longer output)</span>
-          </div>
+              <strong>Free mode active</strong> — using a shared API key with Gemini 2.5 Flash (20 requests/hour).
+              Add your own <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer"
+                style={{ color: '#22d3ee', textDecoration: 'underline' }}>OpenRouter key</a> for
+              full model selection and no rate limits.
+            </div>
+          )}
         </div>
 
-        {/* Figure Extraction Model */}
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{
-            fontSize: '13px', color: COLORS.textMuted, display: 'block',
-            marginBottom: '4px', fontFamily: 'system-ui, sans-serif',
-          }}>
-            Figure Extraction Model
-          </label>
-          <span style={{
-            fontSize: '11px', color: COLORS.textDim, display: 'block',
-            marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
-          }}>
-            Vision model for locating figures &amp; tables in PDFs
-          </span>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-            {EXTRACTION_MODELS.map(m => (
-              <button
-                key={m.id}
-                onClick={() => setExtractionModel(m.id)}
+        {/* ── Model & token settings (hidden in free mode) ── */}
+        {!freeMode && (
+          <>
+            {/* Max Output Tokens */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{
+                fontSize: '13px', color: COLORS.textMuted, display: 'block',
+                marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
+              }}>
+                Max Output Tokens
+                <span style={{
+                  float: 'right', color: COLORS.accent, fontWeight: 600,
+                }}>
+                  {(maxOutputTokens / 1000).toFixed(0)}K
+                </span>
+              </label>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                {tokenPresets.map(preset => (
+                  <button
+                    key={preset.value}
+                    onClick={() => setMaxOutputTokens(preset.value)}
+                    style={{
+                      flex: 1, padding: '8px', borderRadius: '8px', cursor: 'pointer',
+                      border: `1px solid ${maxOutputTokens === preset.value ? COLORS.accent : COLORS.border}`,
+                      backgroundColor: maxOutputTokens === preset.value ? COLORS.accentBg : 'transparent',
+                      color: maxOutputTokens === preset.value ? COLORS.accent : COLORS.textMuted,
+                      fontSize: '13px', fontWeight: 500,
+                      fontFamily: 'system-ui, sans-serif',
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="range"
+                min={4000}
+                max={modelMaxTokens}
+                step={1000}
+                value={Math.min(maxOutputTokens, modelMaxTokens)}
+                onChange={e => setMaxOutputTokens(parseInt(e.target.value, 10))}
                 style={{
-                  flex: '1 1 calc(50% - 4px)', minWidth: '140px',
-                  padding: '10px', borderRadius: '8px', cursor: 'pointer',
-                  border: `1px solid ${extractionModel === m.id ? COLORS.accent : COLORS.border}`,
-                  backgroundColor: extractionModel === m.id ? COLORS.accentBg : 'transparent',
-                  color: extractionModel === m.id ? COLORS.accent : COLORS.textMuted,
-                  fontSize: '13px', fontWeight: 500,
-                  fontFamily: 'system-ui, sans-serif',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px',
+                  width: '100%', accentColor: COLORS.accent,
+                  cursor: 'pointer',
                 }}
-              >
-                <span>{m.label}</span>
-                <span style={{ fontSize: '10px', opacity: 0.7 }}>{m.desc}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+              />
+              <div style={{
+                display: 'flex', justifyContent: 'space-between',
+                fontSize: '11px', color: COLORS.textDim, marginTop: '2px',
+                fontFamily: 'system-ui, sans-serif',
+              }}>
+                <span>4K (less credits needed)</span>
+                <span>{Math.round(modelMaxTokens / 1000)}K (longer output)</span>
+              </div>
+            </div>
 
-        {/* Model Selection */}
-        <div style={{ marginBottom: '24px' }}>
-          <label style={{
-            fontSize: '13px', color: COLORS.textMuted, display: 'block',
-            marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
-          }}>
-            Model
-          </label>
-          <ModelPicker
-            models={availableModels}
-            selectedModel={selectedModel}
-            onSelect={setSelectedModel}
-            loading={modelsLoading}
-          />
-        </div>
+            {/* Figure Extraction Model */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{
+                fontSize: '13px', color: COLORS.textMuted, display: 'block',
+                marginBottom: '4px', fontFamily: 'system-ui, sans-serif',
+              }}>
+                Figure Extraction Model
+              </label>
+              <span style={{
+                fontSize: '11px', color: COLORS.textDim, display: 'block',
+                marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
+              }}>
+                Vision model for locating figures &amp; tables in PDFs
+              </span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {EXTRACTION_MODELS.map(m => (
+                  <button
+                    key={m.id}
+                    onClick={() => setExtractionModel(m.id)}
+                    style={{
+                      flex: '1 1 calc(50% - 4px)', minWidth: '140px',
+                      padding: '10px', borderRadius: '8px', cursor: 'pointer',
+                      border: `1px solid ${extractionModel === m.id ? COLORS.accent : COLORS.border}`,
+                      backgroundColor: extractionModel === m.id ? COLORS.accentBg : 'transparent',
+                      color: extractionModel === m.id ? COLORS.accent : COLORS.textMuted,
+                      fontSize: '13px', fontWeight: 500,
+                      fontFamily: 'system-ui, sans-serif',
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px',
+                    }}
+                  >
+                    <span>{m.label}</span>
+                    <span style={{ fontSize: '10px', opacity: 0.7 }}>{m.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Model Selection */}
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{
+                fontSize: '13px', color: COLORS.textMuted, display: 'block',
+                marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
+              }}>
+                Model
+              </label>
+              <ModelPicker
+                models={availableModels}
+                selectedModel={selectedModel}
+                onSelect={setSelectedModel}
+                loading={modelsLoading}
+              />
+            </div>
+          </>
+        )}
 
         {/* Footer */}
         <div style={{ textAlign: 'center', marginTop: '4px' }}>

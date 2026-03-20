@@ -35,11 +35,11 @@ export default function ExportOverlay({
     <div style={{
       position: 'fixed', inset: 0, zIndex: 1000,
       display: 'flex', flexDirection: 'column',
-      backgroundColor: '#0F1419',
+      backgroundColor: COLORS.bg,
     }}>
       {/* Export toolbar */}
       <div style={{
-        padding: '10px 20px', backgroundColor: '#1A2332',
+        padding: '10px 20px', backgroundColor: COLORS.surface,
         borderBottom: `2px solid ${COLORS.accent}`,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         flexShrink: 0,

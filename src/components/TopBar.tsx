@@ -11,6 +11,7 @@ interface TopBarProps {
   pdfDoc: any;
   pdfTotalPages: number;
   slidesCount: number;
+  hasPoster: boolean;
   autoVoice: boolean;
   setAutoVoice: (v: boolean | ((prev: boolean) => boolean)) => void;
   isSpeaking: boolean;
@@ -26,6 +27,7 @@ export default function TopBar({
   pdfDoc,
   pdfTotalPages,
   slidesCount,
+  hasPoster,
   autoVoice,
   setAutoVoice,
   isSpeaking,
@@ -34,11 +36,12 @@ export default function TopBar({
   setShowSidebar,
   setShowSettings,
 }: TopBarProps) {
-  const tabs: ActiveTab[] = ['chat', 'pdf', 'slides'];
+  const tabs: ActiveTab[] = ['chat', 'pdf', 'slides', 'poster'];
 
   const getTabLabel = (tab: ActiveTab): string => {
     if (tab === 'chat') return 'Chat';
     if (tab === 'pdf') return `PDF${pdfDoc ? ` (${pdfTotalPages}p)` : ''}`;
+    if (tab === 'poster') return `Poster${hasPoster ? ' ✓' : ''}`;
     return `Slides${slidesCount > 0 ? ` (${slidesCount})` : ''}`;
   };
 

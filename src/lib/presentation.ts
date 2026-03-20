@@ -2,7 +2,7 @@
 // DOCENT — Presentation Utility Functions
 // ==========================================================
 
-import type { Message, Slide, ImageCatalogEntry, UploadedFile } from '@/src/types';
+import type { Message, Slide, ImageCatalogEntry, UploadedFile, PosterState, PosterColumn, PosterCard } from '@/src/types';
 
 // Decode HTML entities that LLMs sometimes put in JSON text
 export const decodeEntities = (text: string | undefined): string => {
@@ -561,3 +561,133 @@ export const resolveImageRefs = (slides: Slide[], catalog: ImageCatalogEntry[]):
     return { ...slide, figure: { type: 'card' as const, label: slide.figure!.label || 'Image', description: 'Image not available' } };
   });
 };
+
+// ==========================================================
+// Poster Utilities
+// ==========================================================
+
+export const isPosterIntent = (text: string, messages?: Message[]): boolean => {
+  const lower = text.toLowerCase();
+  const keywords = ['poster', 'conference poster', 'academic poster', 'research poster', 'scientific poster'];
+  // Direct match in current message
+  if (keywords.some(k => lower.includes(k))) return true;
+  // Check recent conversation context
+  if (messages && messages.length >= 2) {
+    const recentUserMsgs = messages.filter(m => m.sender === 'user').slice(-3);
+    return recentUserMsgs.some(m => keywords.some(k => m.text.toLowerCase().includes(k)));
+  }
+  return false;
+};
+
+export const extractPosterJson = (text: string): { posterData: PosterState; fullMatch: string } | null => {
+  // Strategy 1: Find code-fenced JSON blocks
+  const blockRegex = /```(?:\w*)\s*\n?([\s\S]*?)```/g;
+  let match;
+  while ((match = blockRegex.exec(text)) !== null) {
+    const content = match[1].trim();
+    if (!content.includes('"cards"') || !content.includes('"columns"')) continue;
+    const parsed = tryParsePoster(content);
+    if (parsed) return { posterData: parsed, fullMatch: match[0] };
+  }
+
+  // Strategy 2: Raw JSON via brace matching
+  if (text.includes('"cards"') && text.includes('"columns"')) {
+    const cardsIdx = text.indexOf('"cards"');
+    // Walk backwards to find outermost opening brace
+    let braceDepth = 0;
+    let jsonStart = -1;
+    for (let i = cardsIdx; i >= 0; i--) {
+      if (text[i] === '}') braceDepth++;
+      if (text[i] === '{') {
+        if (braceDepth === 0) { jsonStart = i; break; }
+        braceDepth--;
+      }
+    }
+    if (jsonStart >= 0) {
+      const jsonEnd = findMatchingBrace(text, jsonStart);
+      if (jsonEnd > jsonStart) {
+        const rawJson = text.substring(jsonStart, jsonEnd);
+        const parsed = tryParsePoster(rawJson);
+        if (parsed) return { posterData: parsed, fullMatch: rawJson };
+      }
+      // Try remainder for truncated JSON
+      const remainder = text.substring(jsonStart).replace(/```\s*$/, '').trim();
+      const parsed = tryParsePoster(remainder);
+      if (parsed) return { posterData: parsed, fullMatch: remainder };
+    }
+  }
+
+  return null;
+};
+
+function tryParsePoster(candidate: string): PosterState | null {
+  try {
+    const parsed = JSON.parse(candidate);
+    if (validatePosterData(parsed)) return normalizePosterData(parsed);
+  } catch { /* continue */ }
+
+  // Try SVG repair (same as presentations)
+  if (candidate.includes('<svg')) {
+    try {
+      const repaired = candidate.replace(
+        /(<svg[\s\S]*?<\/svg>)/g,
+        (svgBlock) => svgBlock.replace(/(\w)="([^"]*?)"/g, "$1='$2'")
+      );
+      const parsed = JSON.parse(repaired);
+      if (validatePosterData(parsed)) return normalizePosterData(parsed);
+    } catch { /* continue */ }
+  }
+
+  // Truncation repair: try common closers
+  const closers = ['}}', '"}}', '"]}}', '"}}}'];
+  for (const closer of closers) {
+    try {
+      const parsed = JSON.parse(candidate + closer);
+      if (validatePosterData(parsed)) return normalizePosterData(parsed);
+    } catch { /* continue */ }
+  }
+
+  return null;
+}
+
+function validatePosterData(data: Record<string, unknown>): boolean {
+  return !!(
+    data &&
+    typeof data.title === 'string' &&
+    data.columns && Array.isArray(data.columns) && data.columns.length > 0 &&
+    data.cards && typeof data.cards === 'object' && Object.keys(data.cards as object).length > 0
+  );
+}
+
+function normalizePosterData(data: Record<string, unknown>): PosterState {
+  const raw = data as Record<string, unknown>;
+  const columns = (raw.columns as Array<Record<string, unknown>>).map((col, i) => ({
+    id: (col.id as string) || `col${i + 1}`,
+    widthMm: col.widthMm != null ? Number(col.widthMm) : null,
+    cards: (col.cards as string[]) || [],
+  })) as PosterColumn[];
+
+  const rawCards = raw.cards as Record<string, Record<string, unknown>>;
+  const cards: Record<string, PosterCard> = {};
+  for (const [key, val] of Object.entries(rawCards)) {
+    cards[key] = {
+      title: (val.title as string) || key,
+      color: (val.color as PosterCard['color']) || 'blue',
+      grow: val.grow === true,
+      highlights: val.highlights as string[] | undefined,
+      bullets: val.bullets as string[] | undefined,
+      figure: val.figure as PosterCard['figure'] | undefined,
+      table: val.table as PosterCard['table'] | undefined,
+      equation: val.equation as string | undefined,
+    };
+  }
+
+  return {
+    title: (raw.title as string) || 'Untitled Poster',
+    authors: (raw.authors as string) || '',
+    affiliations: (raw.affiliations as string) || '',
+    language: (raw.language as string) || 'en',
+    columns,
+    cards,
+  };
+}

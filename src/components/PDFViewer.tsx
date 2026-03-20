@@ -225,7 +225,7 @@ export default function PDFViewer({
         style={{
           flex: 1, overflow: 'auto', display: 'flex',
           padding: '16px',
-          backgroundColor: '#2A3342',
+          backgroundColor: COLORS.surfaceHover,
         }}
       >
         <canvas

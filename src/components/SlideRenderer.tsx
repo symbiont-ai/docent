@@ -93,10 +93,10 @@ const cornerStyle = (pos: 'tl' | 'tr' | 'bl' | 'br'): React.CSSProperties => ({
   height: '40px',
   ...(pos.includes('t') ? { top: 0 } : { bottom: 0 }),
   ...(pos.includes('l') ? { left: 0 } : { right: 0 }),
-  borderTop: pos.includes('t') ? `2px solid ${COLORS.accent}40` : 'none',
-  borderBottom: pos.includes('b') ? `2px solid ${COLORS.accent}40` : 'none',
-  borderLeft: pos.includes('l') ? `2px solid ${COLORS.accent}40` : 'none',
-  borderRight: pos.includes('r') ? `2px solid ${COLORS.accent}40` : 'none',
+  borderTop: pos.includes('t') ? `2px solid ${COLORS.accentBorder}` : 'none',
+  borderBottom: pos.includes('b') ? `2px solid ${COLORS.accentBorder}` : 'none',
+  borderLeft: pos.includes('l') ? `2px solid ${COLORS.accentBorder}` : 'none',
+  borderRight: pos.includes('r') ? `2px solid ${COLORS.accentBorder}` : 'none',
   pointerEvents: 'none',
 });
 
@@ -169,7 +169,7 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
             style={{
               padding: '3px 8px', fontSize: '11px', borderRadius: '4px',
               cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
-              backgroundColor: `${COLORS.surface}E0`, border: `1px solid ${COLORS.red}60`,
+              backgroundColor: COLORS.surfaceOverlay, border: `1px solid ${COLORS.redMedium}`,
               color: COLORS.red, whiteSpace: 'nowrap',
               backdropFilter: 'blur(4px)',
             }}
@@ -185,7 +185,7 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
             style={{
               padding: '3px 8px', fontSize: '11px', borderRadius: '4px',
               cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
-              backgroundColor: `${COLORS.surface}E0`, border: `1px solid ${COLORS.accent}60`,
+              backgroundColor: COLORS.surfaceOverlay, border: `1px solid ${COLORS.accentMedium}`,
               color: COLORS.accent, whiteSpace: 'nowrap',
               backdropFilter: 'blur(4px)',
             }}
@@ -200,7 +200,7 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
           style={{
             padding: '3px 8px', fontSize: '11px', borderRadius: '4px',
             cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
-            backgroundColor: `${COLORS.surface}E0`, border: `1px solid ${COLORS.accent}60`,
+            backgroundColor: COLORS.surfaceOverlay, border: `1px solid ${COLORS.accentMedium}`,
             color: COLORS.accent, whiteSpace: 'nowrap',
             backdropFilter: 'blur(4px)',
           }}
@@ -218,7 +218,7 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
       <div style={{
         position: 'absolute', inset: 0, display: 'flex',
         alignItems: 'center', justifyContent: 'center',
-        backgroundColor: `${COLORS.bg}80`, zIndex: 3,
+        backgroundColor: COLORS.bgOverlay, zIndex: 3,
         backdropFilter: 'blur(2px)', borderRadius: '8px',
       }}>
         <div style={{
@@ -334,7 +334,7 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
         {/* Radial gradient background overlay */}
         <div style={{
           position: 'absolute', inset: 0,
-          background: `radial-gradient(ellipse at center, ${COLORS.accent}0A 0%, transparent 70%)`,
+          background: `radial-gradient(ellipse at center, ${COLORS.accentGlow} 0%, transparent 70%)`,
           pointerEvents: 'none',
         }} />
 
@@ -427,7 +427,7 @@ function SlideRenderer({ slide, slideNumber, totalSlides, onShowPromptEditor, on
           }}>
             <span style={{
               fontSize: '9px', color: COLORS.textMuted, fontStyle: 'italic',
-              backgroundColor: `${COLORS.bg}80`, padding: '2px 8px', borderRadius: '4px',
+              backgroundColor: COLORS.bgOverlay, padding: '2px 8px', borderRadius: '4px',
             }}>
               {slide.figure.caption}
             </span>

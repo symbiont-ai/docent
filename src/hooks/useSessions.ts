@@ -14,8 +14,11 @@ import type {
   Message,
   UploadedFile,
   PresentationState,
+  PosterState,
+  PosterCard,
   Slide,
   Figure,
+  ExtractedFigure,
   NarrativeArcEntry,
   AuditResult,
 } from '@/src/types';
@@ -37,6 +40,34 @@ function stripFigureForStorage(fig: Figure): Figure {
   }
   return cleaned;
 }
+/**
+ * Resolve extracted_ref figures in poster cards by embedding croppedDataURL.
+ * This makes the poster self-contained so it survives session restore
+ * (when extractedFiguresRef is no longer available).
+ */
+function resolvePosterFigures(
+  poster: PosterState,
+  extractedFigures?: ExtractedFigure[] | null,
+): PosterState {
+  if (!extractedFigures || extractedFigures.length === 0) return poster;
+
+  const resolvedCards: Record<string, PosterCard> = {};
+  for (const [id, card] of Object.entries(poster.cards)) {
+    if (card.figure?.type === 'extracted_ref' && card.figure.extractedId && !card.figure.croppedDataURL) {
+      const ef = extractedFigures.find(f => f.id === card.figure!.extractedId);
+      if (ef?.croppedDataURL) {
+        resolvedCards[id] = {
+          ...card,
+          figure: { ...card.figure, croppedDataURL: ef.croppedDataURL },
+        };
+        continue;
+      }
+    }
+    resolvedCards[id] = card;
+  }
+  return { ...poster, cards: resolvedCards };
+}
+
 const FILE_CHUNK_PREFIX = 'docent:filechunk:';
 const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB per chunk for IndexedDB
 
@@ -54,6 +85,7 @@ export interface SessionCallbacks {
   setSelectedModel?: (model: string) => void;
   setNarrativeContext?: (arc: NarrativeArcEntry[]) => void;
   setAuditResults?: (results: Record<number, AuditResult>) => void;
+  setPosterState?: (state: PosterState | null) => void;
 }
 
 export function useSessions() {
@@ -134,6 +166,8 @@ export function useSessions() {
     selectedModel?: string,
     narrativeArc?: NarrativeArcEntry[],
     auditResults?: Record<number, AuditResult>,
+    posterState?: PosterState | null,
+    extractedFigures?: ExtractedFigure[] | null,
   ): Promise<string | null> => {
     // Prevent concurrent saves
     if (savingRef.current) {
@@ -158,10 +192,12 @@ export function useSessions() {
       const sessionId = existingSessionId || `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const now = new Date().toISOString();
 
-      // Generate title from first user message or presentation title
+      // Generate title from first user message, presentation, or poster title
       let title = 'Untitled Session';
       if (presentationState?.slides?.length && presentationState.title) {
         title = presentationState.title;
+      } else if (posterState && Object.keys(posterState.cards).length > 0 && posterState.title) {
+        title = posterState.title;
       } else {
         const firstUserMsg = msgs.find(m => m.sender === 'user');
         if (firstUserMsg) {
@@ -214,6 +250,9 @@ export function useSessions() {
           : null,
         narrativeArc: narrativeArc && narrativeArc.length > 0 ? narrativeArc : undefined,
         auditResults: auditResults && Object.keys(auditResults).length > 0 ? auditResults : undefined,
+        poster: posterState && Object.keys(posterState.cards).length > 0
+          ? resolvePosterFigures(posterState, extractedFigures)
+          : null,
         pdfViewer: pdfPage != null
           ? { page: pdfPage, zoom: pdfZoom || 1.0 }
           : null,
@@ -258,6 +297,7 @@ export function useSessions() {
         slides: [], currentSlide: 0, title: '', language: 'en',
         isPresenting: false, autoAdvance: false, speakerNotesVisible: false,
       });
+      callbacks.setPosterState?.(null);
       callbacks.removePdf?.();
 
       // Restore messages
@@ -303,6 +343,11 @@ export function useSessions() {
           autoAdvance: true,
           speakerNotesVisible: true,
         });
+      }
+
+      // Restore poster state
+      if (callbacks.setPosterState) {
+        callbacks.setPosterState(session.poster || null);
       }
 
       // Restore narrative arc (for slide audit)
@@ -454,6 +499,7 @@ export function useSessions() {
       autoAdvance: false,
       speakerNotesVisible: false,
     });
+    callbacks.setPosterState?.(null);
     callbacks.removePdf?.();
     callbacks.setLoadingMsg?.('');
     callbacks.setLastTokenUsage?.(null);

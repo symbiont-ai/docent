@@ -71,8 +71,8 @@ export default function ChatPanel({
           alignItems: 'center', gap: '8px', fontSize: '12px',
           fontFamily: 'system-ui, sans-serif', flexShrink: 0,
           ...(assessmentPhase === 'active' || assessmentPhase === 'report'
-            ? { backgroundColor: '#D4A85315', border: `1px solid ${COLORS.accent}40`, color: COLORS.accent }
-            : { backgroundColor: '#5BB8D410', border: `1px solid ${COLORS.cyan}30`, color: COLORS.cyan }
+            ? { backgroundColor: COLORS.accentBg, border: `1px solid ${COLORS.accentBorder}`, color: COLORS.accent }
+            : { backgroundColor: COLORS.cyanBg, border: `1px solid ${COLORS.cyanBorderLight}`, color: COLORS.cyan }
           ),
         }}>
           {assessmentPhase === 'active' ? (
@@ -216,9 +216,9 @@ export default function ChatPanel({
             style={{
               padding: '8px 10px', borderRadius: '8px',
               cursor: 'pointer', fontSize: '12px', fontFamily: 'system-ui, sans-serif', fontWeight: 500,
-              border: `1px solid ${deepThinking ? '#A78BFA' : COLORS.border}`,
-              backgroundColor: deepThinking ? '#A78BFA15' : 'transparent',
-              color: deepThinking ? '#A78BFA' : COLORS.textMuted,
+              border: `1px solid ${deepThinking ? COLORS.purple : COLORS.border}`,
+              backgroundColor: deepThinking ? COLORS.purpleBg : 'transparent',
+              color: deepThinking ? COLORS.purple : COLORS.textMuted,
             }}
           >
             {'\uD83E\uDDE0'} {deepThinking ? 'Deep ON' : 'Deep'}

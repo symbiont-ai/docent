@@ -2,7 +2,7 @@
 // DOCENT — Constants & Configuration
 // ==========================================================
 
-import { COLORS } from './colors';
+import { COLORS, DARK_PALETTE, LIGHT_PALETTE } from './colors';
 import type { VoiceConfig, ModelOption } from '@/src/types';
 
 // Sage — the AI presenter
@@ -131,8 +131,13 @@ SKIP clarification and generate immediately ONLY when:
 
 When creating presentations, always include a References slide with proper citations for any sources you used — including web search results, papers mentioned by the user, or uploaded PDFs. Format each reference with authors (if known), title, source/URL, and year.`;
 
-// Presentation generation instructions
-export const PRESENTATION_PROMPT = `PRESENTATIONS: When asked to prepare a presentation, output a \`\`\`json code block with this structure:
+// Presentation generation instructions (theme-aware: SVG colors match current palette)
+export function getPresentationPrompt(): string {
+  const isDark = typeof window !== 'undefined'
+    ? document.documentElement.getAttribute('data-theme') !== 'light'
+    : true;
+  const p = isDark ? DARK_PALETTE : LIGHT_PALETTE;
+  return `PRESENTATIONS: When asked to prepare a presentation, output a \`\`\`json code block with this structure:
 {"title": "Title", "language": "en", "slides": [{"title": "Slide Title", "content": ["Key finding about X [1]", "Another important point [2]"], "references": ["Author et al., Study Title, Journal, 2024", "Organization, Report Name, 2023"], "figure": {"type": "svg", "content": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>...</svg>", "label": "Diagram description"}, "layout": "figure_focus", "speakerNotes": "Narration"}]}
 LANGUAGE FIELD: Always include a "language" field with the ISO 639-1 code (e.g. "en", "tr", "de", "fr", "ja", "zh") matching the language of your slide content and speaker notes. This ensures narration uses the correct voice.
 Figure types:
@@ -153,7 +158,7 @@ Exception: You MAY use SVG alongside an extracted_ref only if the slide needs a 
 SVG FIGURE GUIDELINES — when no images are uploaded or when you need a custom diagram:
 - CRITICAL: Use SINGLE QUOTES for all SVG attributes (viewBox='...', fill='...', font-family='...'). Double quotes break JSON parsing.
 - CRITICAL: Never use bare & in SVG text content — always use &amp; (e.g. "R&amp;D", "storage &amp; processing"). This applies ONLY inside SVG content strings, NOT in slide titles, bullets, or speaker notes — those should use normal & characters.
-- Use dark theme colors: backgrounds #1A2332, text #E8EAED, accents #D4A853 #5BB8D4 #6BC485 #D46B6B #A78BFA
+- Use theme colors: backgrounds ${p.surface}, text ${p.text}, accents ${p.accent} ${p.cyan} ${p.green} ${p.red} ${p.purple}
 - Include text labels directly in the SVG using <text> elements (font-family='system-ui', font-size 14-18px)
 - SVG figures are STRONGLY PREFERRED over "card" figures for any conceptual, structural, or process-oriented content.
 - Every content slide SHOULD have a figure. Only title, references, and closing slides should be text_only.
@@ -237,7 +242,7 @@ REQUIRED SLIDES (these are ALWAYS extras, not counted toward the user's requeste
   - If a PDF paper is uploaded AND the user is NOT presenting as the author: use layout "figure_focus" — the app will automatically place a snapshot of the paper's title page as the figure. Do NOT generate an SVG for the title slide in this case.
   - If a PDF paper is uploaded AND the user IS presenting as the author (first-person "we/I" narrative): use layout "balanced" and generate a DECORATIVE SVG figure. The author presents their own work — showing the paper's title page as an image would look redundant.
   - If NO PDF is uploaded: use layout "balanced" and generate a DECORATIVE SVG figure.
-  Decorative SVG rules: This SVG should be an abstract, atmospheric, topic-relevant cover graphic — NOT an information-dense diagram. Think: artistic visualization of the subject's essence. Use soft gradients, abstract shapes, flowing lines, or geometric patterns that evoke the topic. Use the dark theme palette (#1A2332 background, #D4A853 gold, #5BB8D4 cyan, #6BC485 green, #A78BFA purple). Keep it elegant and minimal — this is a cover graphic, not a data chart. viewBox='0 0 800 500'. Examples: for machine learning, an abstract neural mesh with glowing gold nodes; for biology, organic flowing cell-like shapes with gradient fills; for history, layered geometric arcs suggesting a timeline.
+  Decorative SVG rules: This SVG should be an abstract, atmospheric, topic-relevant cover graphic — NOT an information-dense diagram. Think: artistic visualization of the subject's essence. Use soft gradients, abstract shapes, flowing lines, or geometric patterns that evoke the topic. Use the theme palette (${p.surface} background, ${p.accent} gold, ${p.cyan} cyan, ${p.green} green, ${p.purple} purple). Keep it elegant and minimal — this is a cover graphic, not a data chart. viewBox='0 0 800 500'. Examples: for machine learning, an abstract neural mesh with glowing gold nodes; for biology, organic flowing cell-like shapes with gradient fills; for history, layered geometric arcs suggesting a timeline.
 - SECOND SLIDE: OVERVIEW SLIDE with layout "text_only", title "Overview". content = a bullet list previewing the main topics/sections of the presentation (one bullet per major section/theme). This acts as a table of contents so the audience knows what to expect. speakerNotes = brief roadmap narration. Do NOT include per-slide references on this slide.
 - LAST SLIDE: CLOSING SLIDE with layout "text_only", title "Thank You — Questions?", content = 1-2 key takeaway bullets.
 - SECOND-TO-LAST SLIDE (if applicable): REFERENCES SLIDE with layout "text_only", title "References", content = list of sources cited in the presentation. Include author names, title, journal/venue/URL, and year. Only include sources you actually used. If no external sources were referenced, omit this slide.
@@ -266,6 +271,7 @@ If no number is specified, target these content slide counts by mode:
 For equation-heavy or theory papers (5+ named theorems/equations), err toward the higher end.
 
 Use svg figures extensively for topics without uploaded images. Vary diagram types across slides — do NOT use the same diagram style (e.g. flowchart) for every slide. Mix flowcharts, tables, timelines, schematics, networks, and bar charts to keep the presentation visually engaging.`;
+}
 
 // Mode-specific narrative stance prompts (appended to system prompt in Pass 2)
 export const AUTHOR_MODE_PROMPT = `NARRATIVE STANCE — AUTHOR ADVOCACY:
@@ -295,4 +301,53 @@ You are presenting someone else's paper for a journal club discussion. Frame eve
 // Intent detection meta-instruction — appended to system prompt when keyword check misses.
 // Tells the model to signal presentation intent instead of answering, so we can retry with full prompt.
 // For non-presentation messages the model just answers normally → zero delay.
-export const INTENT_META_INSTRUCTION = `\n\nIMPORTANT: If the user is requesting a presentation, slides, a talk, or a lecture (in ANY language), respond with ONLY the exact marker [PRESENTATION_INTENT] and nothing else. Do not generate any slides or other content — just the marker. Otherwise, answer their question normally.`;
+export const INTENT_META_INSTRUCTION = `\n\nIMPORTANT: If the user is requesting a presentation, slides, a talk, or a lecture (in ANY language), respond with ONLY the exact marker [PRESENTATION_INTENT] and nothing else. If the user is requesting a POSTER (in ANY language), respond with ONLY the exact marker [POSTER_INTENT] and nothing else. Do not generate any slides, poster, or other content — just the marker. Otherwise, answer their question normally.`;
+
+// ── Poster Generation ──
+
+export const POSTER_WORKFLOW = `POSTER WORKFLOW — CLARIFY BEFORE CREATING:
+When a user asks you to create a POSTER, follow this workflow:
+1. If the request is clear enough (PDF provided + "make a poster"), skip clarifications and generate immediately.
+2. If ambiguous, ask 1-2 brief clarifying questions:
+   - Conference name (for the header badge)?
+   - Poster size preference (A0 landscape, A1 landscape)?
+   - Any specific sections to emphasize?
+Then generate the poster JSON.
+
+When creating posters, always extract the paper's key contributions, method, results, and conclusions into concise poster sections.`;
+
+// Poster generation instructions (theme-aware)
+export function getPosterPrompt(): string {
+  const isDark = typeof window !== 'undefined'
+    ? document.documentElement.getAttribute('data-theme') !== 'light'
+    : true;
+  const p = isDark ? DARK_PALETTE : LIGHT_PALETTE;
+  const fence = '`' + '`' + '`';
+  return 'POSTERS: When asked to create a poster, output a ' + fence + 'json code block with this structure:\n' +
+    '{"title": "Paper Title", "authors": "Author 1, Author 2", "affiliations": "University of X", "conference": "CONF 2026", "language": "en", "columns": [{"id": "col1", "widthMm": 280, "cards": ["tldr", "method"]}, {"id": "col2", "widthMm": null, "cards": ["results"]}, {"id": "col3", "widthMm": 220, "cards": ["quant", "conclusion"]}], "cards": {"tldr": {"title": "TL;DR", "color": "blue", "grow": false, "highlights": ["One-sentence summary of the paper"], "bullets": ["Contribution 1", "Contribution 2", "Contribution 3"]}, "method": {"title": "Method", "color": "teal", "grow": true, "bullets": ["Step 1", "Step 2"], "figure": {"type": "svg", "content": "<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 800 400\'>...</svg>", "label": "Architecture diagram"}}, "results": {"title": "Results", "color": "purple", "grow": true, "figure": {"type": "extracted_ref", "extractedId": "ef_3", "label": "Main results figure"}}, "quant": {"title": "Quantitative Results", "color": "orange", "grow": false, "table": {"headers": ["Method", "Metric 1", "Metric 2"], "rows": [["Baseline", "85.2", "72.1"], ["Ours", "91.7", "83.4"]]}}, "conclusion": {"title": "Conclusion", "color": "red", "grow": false, "bullets": ["Takeaway 1", "Takeaway 2"]}}}\n\n' +
+    'POSTER STRUCTURE:\n' +
+    '- A poster has a HEADER (title, authors, affiliations, conference badge) and a BODY (columns of cards).\n' +
+    '- Target 5-8 cards across 3 columns. Each card is a self-contained section.\n' +
+    '- Column widths in mm: two fixed columns (200-300mm each) and one flexible (null = fills remaining).\n' +
+    '- Card colors: "blue" (default), "orange", "teal", "purple", "red" — vary them across cards.\n' +
+    '- Set "grow": true for cards with large figures that should fill remaining column space.\n\n' +
+    'CARD CONTENT TYPES (each card can have any combination):\n' +
+    '- "highlights": Array of highlighted summary sentences (rendered in a colored box)\n' +
+    '- "bullets": Array of bullet points\n' +
+    '- "figure": A visual element (same types as presentations: svg, extracted_ref, pdf_crop, image)\n' +
+    '- "table": {"headers": [...], "rows": [[...]]} for quantitative comparisons\n' +
+    '- "equation": A LaTeX equation string (rendered with KaTeX)\n\n' +
+    'FIGURE GUIDELINES FOR POSTERS:\n' +
+    '- Use "extracted_ref" to reference figures from the paper\'s EXTRACTED FIGURE CATALOG when available.\n' +
+    '- Use "svg" for custom diagrams (architecture, flowcharts, pipelines).\n' +
+    '- SVG theme colors: backgrounds ' + p.surface + ', text ' + p.text + ', accents ' + p.accent + ' ' + p.cyan + ' ' + p.green + ' ' + p.red + ' ' + p.purple + '\n' +
+    '- SVGs must use SINGLE QUOTES for attributes. Never use bare & in text — use &amp;\n\n' +
+    'POSTER CONTENT GUIDELINES:\n' +
+    '- Be CONCISE — posters are meant to be scanned, not read in detail.\n' +
+    '- Each bullet should be 1-2 short sentences max.\n' +
+    '- Prioritize visuals (figures, tables, diagrams) over text.\n' +
+    '- Include the paper\'s BEST result prominently.\n' +
+    '- The TL;DR card should be the first thing readers see — make it compelling.\n' +
+    '- If a PDF is uploaded, extract actual authors, affiliations, and results from the paper.\n' +
+    '- For topic-based posters (no PDF), create informative educational content.';
+}

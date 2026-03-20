@@ -266,7 +266,7 @@ export default function SlideViewer({
               style={{
                 padding: '2px 8px', fontSize: '11px', borderRadius: '4px',
                 cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
-                backgroundColor: 'transparent', border: `1px solid ${COLORS.red}60`,
+                backgroundColor: 'transparent', border: `1px solid ${COLORS.redMedium}`,
                 color: COLORS.red, marginTop: '4px',
               }}
             >
@@ -485,9 +485,9 @@ export default function SlideViewer({
                   style={{
                     fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
                     fontFamily: 'system-ui, sans-serif', cursor: 'help',
-                    backgroundColor: isSkipped ? `${COLORS.textDim}15` : check.pass ? `${COLORS.green}15` : `${COLORS.red}15`,
+                    backgroundColor: isSkipped ? COLORS.textDimBg : check.pass ? COLORS.greenBg : COLORS.redBg,
                     color: isSkipped ? COLORS.textDim : check.pass ? COLORS.green : COLORS.red,
-                    border: `1px solid ${isSkipped ? `${COLORS.textDim}40` : check.pass ? `${COLORS.green}40` : `${COLORS.red}40`}`,
+                    border: `1px solid ${isSkipped ? COLORS.textDimBorder : check.pass ? COLORS.greenBorder : COLORS.redBorder}`,
                   }}
                 >
                   {isSkipped ? '\u2796' : check.pass ? '\u2705' : '\u274C'} {check.name}

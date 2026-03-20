@@ -266,7 +266,7 @@ export default function CropEditor({ figure, pageThumb, cropFn, onApply, onCance
 
                   {/* Current region border (dashed if no new selection, solid if active) */}
                   {!newRegion && !isDragging && (
-                    <div style={regionToStyle(originalRegion, `${COLORS.accent}90`, 'dashed')} />
+                    <div style={regionToStyle(originalRegion, COLORS.accentStrong, 'dashed')} />
                   )}
 
                   {/* New region border (solid accent) */}
@@ -278,7 +278,7 @@ export default function CropEditor({ figure, pageThumb, cropFn, onApply, onCance
                   {selectionRect && (
                     <div style={{
                       ...regionToStyle(selectionRect, COLORS.accent, 'solid'),
-                      backgroundColor: `${COLORS.accent}15`,
+                      backgroundColor: COLORS.accentBg,
                     }} />
                   )}
 
@@ -358,7 +358,7 @@ export default function CropEditor({ figure, pageThumb, cropFn, onApply, onCance
               cursor: newRegion ? 'pointer' : 'default',
               backgroundColor: 'transparent',
               border: `1px solid ${COLORS.border}`,
-              color: newRegion ? COLORS.textMuted : `${COLORS.textMuted}50`,
+              color: newRegion ? COLORS.textMuted : COLORS.textDimHalf,
               fontFamily: 'system-ui, sans-serif',
             }}
           >
@@ -382,9 +382,9 @@ export default function CropEditor({ figure, pageThumb, cropFn, onApply, onCance
               style={{
                 padding: '6px 18px', fontSize: '12px', borderRadius: '6px',
                 cursor: newRegion ? 'pointer' : 'default',
-                backgroundColor: newRegion ? COLORS.accent : `${COLORS.accent}40`,
+                backgroundColor: newRegion ? COLORS.accent : COLORS.accentBorder,
                 border: 'none',
-                color: newRegion ? COLORS.bg : `${COLORS.bg}80`,
+                color: newRegion ? COLORS.bg : COLORS.bgOverlay,
                 fontWeight: 600, fontFamily: 'system-ui, sans-serif',
               }}
             >
