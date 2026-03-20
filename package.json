@@ -17,6 +17,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "idb-keyval": "^6.2.2",
     "next": "^16.1.6",
     "pdfjs-dist": "^5.4.624",
