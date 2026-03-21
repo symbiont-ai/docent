@@ -38,6 +38,7 @@ import type {
   ActiveTab,
   VoiceGender,
   TTSEngine,
+  STTEngine,
   ImageCatalogEntry,
   ExtractedFigure,
   NarrativeArcEntry,
@@ -99,6 +100,7 @@ import {
 } from '@/src/lib/assessment';
 import { buildDeepAnalysisPrompt } from '@/src/lib/deep-analysis';
 import { useTTS } from './useTTS';
+import { useSTT } from './useSTT';
 import { useMemory } from './useMemory';
 import { usePDF } from './usePDF';
 import { usePresentation } from './usePresentation';
@@ -297,6 +299,10 @@ export function useChat() {
     if (typeof window !== 'undefined') return localStorage.getItem('docent_browserVoiceName') || '';
     return '';
   });
+  const [sttEngine, setSttEngine] = useState<STTEngine>(() => {
+    if (typeof window !== 'undefined') return (localStorage.getItem('docent_sttEngine') as STTEngine) || 'browser';
+    return 'browser';
+  });
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL);
   const [extractionModel, setExtractionModel] = useState(EXTRACTION_MODEL);
   const [apiKey, setApiKey] = useState('');
@@ -308,6 +314,7 @@ export function useChat() {
   useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('docent_ttsEngine', ttsEngine); }, [ttsEngine]);
   useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('docent_googleApiKey', googleApiKey); }, [googleApiKey]);
   useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('docent_browserVoiceName', browserVoiceName); }, [browserVoiceName]);
+  useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('docent_sttEngine', sttEngine); }, [sttEngine]);
   const [availableModels, setAvailableModels] = useState<ModelOption[]>(FALLBACK_MODELS);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [maxOutputTokens, setMaxOutputTokens] = useState(16000);
@@ -331,6 +338,18 @@ export function useChat() {
   const pdf = usePDF({ setLoadingMsg });
   const presentation = usePresentation(imageCatalogRef);
   const sessions = useSessions();
+
+  // ── Speech-to-Text ──────────────────────────────────────
+  const handleSendRef = useRef<(text?: string) => void>();
+  const stt = useSTT({
+    engine: sttEngine,
+    apiKey,
+    onFinalTranscript: useCallback((text: string) => {
+      // Stop TTS if speaking (prevent feedback)
+      tts.stopSpeaking();
+      handleSendRef.current?.(text);
+    }, [tts]),
+  });
 
   // ── Load API key, maxOutputTokens, TTS engine & Google API key from localStorage on mount ──
   useEffect(() => {
@@ -2514,6 +2533,9 @@ NUMBERING RULE: Use the EXACT numbering from the paper for theorems, proposition
     presentation, memory, sessions, tts,
   ]);
 
+  // Keep handleSendRef current for useSTT callback
+  handleSendRef.current = handleSend;
+
   // ── Export HTML state ────────────────────────────────────
   const [exportHtml, setExportHtml] = useState<string | null>(null);
 
@@ -3315,6 +3337,17 @@ Rules:
     posterState,
     setPosterState,
     extractedFigures: extractedFiguresRef.current || presentation.getExtractedFigures(),
+
+    // ── Speech-to-Text ──
+    sttEngine,
+    setSttEngine,
+    isListening: stt.isListening,
+    interimTranscript: stt.interimTranscript,
+    startListening: stt.startListening,
+    stopListening: stt.stopListening,
+    sttError: stt.error,
+    clearSttError: stt.clearError,
+    browserSTTSupported: stt.browserSTTSupported,
 
     // ── Misc ──
     messagesEndRef,

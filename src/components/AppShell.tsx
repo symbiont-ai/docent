@@ -43,6 +43,8 @@ export default function AppShell() {
     exportHtml, setExportHtml, cancelGeneration, messagesEndRef,
     autoSearchActive,
     posterState, setPosterState, extractedFigures,
+    sttEngine, setSttEngine, isListening, interimTranscript,
+    startListening, stopListening, sttError, clearSttError, browserSTTSupported,
   } = useChat();
 
   // --- Image generation state ---
@@ -64,6 +66,29 @@ export default function AppShell() {
     if (isSpeaking) stopSpeaking();
     else speak(text, undefined, lang);
   };
+
+  // --- Mic toggle (STT) ---
+  const toggleMic = useCallback(() => {
+    if (isListening) {
+      stopListening();
+    } else {
+      // Stop TTS if speaking to prevent feedback
+      if (isSpeaking) stopSpeaking();
+      startListening();
+    }
+  }, [isListening, startListening, stopListening, isSpeaking, stopSpeaking]);
+
+  // --- Ctrl+M keyboard shortcut ---
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'm') {
+        e.preventDefault();
+        toggleMic();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [toggleMic]);
 
   // --- Slide navigation ---
   const handleSlideNavigate = (action: 'first' | 'prev' | 'next' | 'last') => {
@@ -465,6 +490,7 @@ Return your answer as JSON ONLY, no other text:
       <style>{`
         @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes micPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(216,166,72,0.4); } 50% { box-shadow: 0 0 0 8px rgba(216,166,72,0); } }
       `}</style>
 
       {/* Hidden file input (accessible from all tabs) */}
@@ -594,6 +620,24 @@ Return your answer as JSON ONLY, no other text:
         </div>
       )}
 
+      {/* STT error banner */}
+      {sttError && (
+        <div className="print-hide" style={{
+          padding: '6px 20px', backgroundColor: COLORS.redBg,
+          borderBottom: `1px solid ${COLORS.redBorder}`,
+          display: 'flex', alignItems: 'center', gap: '10px',
+          fontSize: '12px', color: COLORS.red, fontFamily: 'system-ui, sans-serif',
+        }}>
+          <span style={{ flex: 1 }}>{'\uD83C\uDFA4'} {sttError}</span>
+          <span
+            onClick={clearSttError}
+            style={{ fontSize: '11px', color: COLORS.red, textDecoration: 'underline', cursor: 'pointer' }}
+          >
+            dismiss
+          </span>
+        </div>
+      )}
+
       {/* ===== MAIN AREA ===== */}
       <div style={{
         flex: 1, display: 'flex', overflow: 'hidden', position: 'relative',
@@ -664,6 +708,9 @@ Return your answer as JSON ONLY, no other text:
               selectedModelName={freeMode ? 'Gemini 2.5 Flash (Free)' : (availableModels.find(m => m.id === selectedModel)?.name || selectedModel)}
               assessmentPhase={assessmentState.phase}
               hasPresentation={presentationState.slides.length > 0}
+              isListening={isListening}
+              interimTranscript={interimTranscript}
+              onToggleMic={toggleMic}
             />
           )}
 
@@ -895,6 +942,8 @@ Return your answer as JSON ONLY, no other text:
         extractionModel={extractionModel}
         setExtractionModel={setExtractionModel}
         freeMode={freeMode}
+        sttEngine={sttEngine}
+        setSttEngine={setSttEngine}
       />
     </div>
   );

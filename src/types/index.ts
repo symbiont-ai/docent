@@ -219,6 +219,7 @@ export interface AuditResult {
 
 export type VoiceGender = 'female' | 'male' | 'neutral';
 export type TTSEngine = 'browser' | 'gemini';
+export type STTEngine = 'browser' | 'whisper';
 
 export interface VoiceConfig {
   pitch: number;

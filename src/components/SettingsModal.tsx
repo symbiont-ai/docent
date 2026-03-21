@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { COLORS } from '@/src/lib/colors';
 import { getStoredTheme, applyTheme, onSystemThemeChange, type ThemeChoice } from '@/src/lib/theme';
 import ModelPicker from './ModelPicker';
-import type { VoiceGender, TTSEngine, ModelOption } from '@/src/types';
+import type { VoiceGender, TTSEngine, STTEngine, ModelOption } from '@/src/types';
 
 const THEME_OPTIONS: { value: ThemeChoice; label: string; icon: string }[] = [
   { value: 'dark', label: 'Dark', icon: '\u{1F319}' },
@@ -36,6 +36,8 @@ interface SettingsModalProps {
   extractionModel: string;
   setExtractionModel: (v: string) => void;
   freeMode?: boolean;
+  sttEngine?: STTEngine;
+  setSttEngine?: (v: STTEngine) => void;
 }
 
 const EXTRACTION_MODELS = [
@@ -98,6 +100,8 @@ export default function SettingsModal({
   extractionModel,
   setExtractionModel,
   freeMode,
+  sttEngine,
+  setSttEngine,
 }: SettingsModalProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGoogleKey, setShowGoogleKey] = useState(false);
@@ -291,6 +295,45 @@ export default function SettingsModal({
             ))}
           </div>
         </div>
+
+        {/* Speech Input Engine */}
+        {sttEngine !== undefined && setSttEngine && (
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{
+              fontSize: '13px', color: COLORS.textMuted, display: 'block',
+              marginBottom: '8px', fontFamily: 'system-ui, sans-serif',
+            }}>
+              Speech Input (Ctrl+M)
+            </label>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {[
+                { id: 'browser' as STTEngine, label: 'Browser', desc: 'Free' },
+                { id: 'whisper' as STTEngine, label: 'Whisper', desc: 'Premium' },
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  onClick={() => setSttEngine(opt.id)}
+                  style={{
+                    flex: 1, padding: '8px 12px', borderRadius: '6px',
+                    border: `1px solid ${sttEngine === opt.id ? COLORS.accent : COLORS.border}`,
+                    backgroundColor: sttEngine === opt.id ? COLORS.accentBg : 'transparent',
+                    color: sttEngine === opt.id ? COLORS.accent : COLORS.textMuted,
+                    cursor: 'pointer', fontSize: '12px', fontFamily: 'system-ui, sans-serif',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontWeight: 600 }}>{opt.label}</div>
+                  <div style={{ fontSize: '10px', opacity: 0.7 }}>{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+            {sttEngine === 'whisper' && (
+              <div style={{ fontSize: '10px', color: COLORS.textMuted, marginTop: '4px', opacity: 0.7 }}>
+                Uses your OpenAI API key for Whisper transcription
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Google API Key (visible only when Gemini TTS selected) */}
         {ttsEngine === 'gemini' && (

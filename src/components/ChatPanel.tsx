@@ -30,6 +30,10 @@ interface ChatPanelProps {
   assessmentPhase?: AssessmentPhase;
   /** Whether a presentation is loaded (for Q&A banner) */
   hasPresentation?: boolean;
+  /** Speech-to-text state */
+  isListening?: boolean;
+  interimTranscript?: string;
+  onToggleMic?: () => void;
 }
 
 const SUGGESTION_PROMPTS = [
@@ -59,6 +63,9 @@ export default function ChatPanel({
   selectedModelName,
   assessmentPhase,
   hasPresentation,
+  isListening,
+  interimTranscript,
+  onToggleMic,
 }: ChatPanelProps) {
   const effectiveSearch = searchMode || !!autoSearchActive;
 
@@ -227,7 +234,7 @@ export default function ChatPanel({
           {/* Text input */}
           <input
             type="text"
-            value={input}
+            value={isListening && interimTranscript ? interimTranscript : input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -236,22 +243,44 @@ export default function ChatPanel({
               }
             }}
             placeholder={
-              isLoading
-                ? 'Sage is working...'
-                : uploadedFiles.length > 0
-                  ? 'Ask Sage to present this paper...'
-                  : 'Ask Sage anything, or request a presentation...'
+              isListening
+                ? 'Listening...'
+                : isLoading
+                  ? 'Sage is working...'
+                  : uploadedFiles.length > 0
+                    ? 'Ask Sage to present this paper...'
+                    : 'Ask Sage anything, or request a presentation...'
             }
             disabled={isLoading}
             style={{
               flex: 1, padding: '10px 16px', borderRadius: '8px',
-              border: `1px solid ${COLORS.border}`,
+              border: `1px solid ${isListening ? COLORS.accent : COLORS.border}`,
               backgroundColor: isLoading ? COLORS.surface : COLORS.bg,
               color: COLORS.text, fontSize: '14px', outline: 'none',
               fontFamily: 'system-ui, sans-serif',
               opacity: isLoading ? 0.5 : 1,
             }}
           />
+
+          {/* Mic button */}
+          {onToggleMic && (
+            <button
+              onClick={onToggleMic}
+              disabled={isLoading}
+              title={isListening ? 'Stop listening (Ctrl+M)' : 'Voice input (Ctrl+M)'}
+              style={{
+                padding: '10px 12px', borderRadius: '8px', border: 'none',
+                backgroundColor: isListening ? COLORS.accent : COLORS.surface,
+                color: isListening ? COLORS.bg : COLORS.textMuted,
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                fontSize: '16px',
+                animation: isListening ? 'micPulse 1.5s ease-in-out infinite' : 'none',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              {isListening ? '\uD83D\uDD34' : '\uD83C\uDFA4'}
+            </button>
+          )}
 
           {/* Send button */}
           <button
