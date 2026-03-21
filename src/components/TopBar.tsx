@@ -80,6 +80,11 @@ export default function TopBar({
         <span style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic', marginLeft: '6px' }}>
           — Learn something new today
         </span>
+        {process.env.NEXT_PUBLIC_BUILD_DATE && (
+          <span style={{ fontSize: '10px', color: COLORS.textMuted, marginLeft: '8px', opacity: 0.6 }}>
+            v{process.env.NEXT_PUBLIC_BUILD_DATE}
+          </span>
+        )}
       </div>
 
       {/* Right side: tabs, voice, settings */}
