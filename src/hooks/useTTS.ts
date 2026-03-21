@@ -14,12 +14,24 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const [voicesReady, setVoicesReady] = useState(false);
+  const [ttsRate, setTTSRate] = useState(1.0);
+  const ttsRateRef = useRef(1.0);
   const generationRef = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const geminiAbortRef = useRef<AbortController | null>(null);
   const prefetchBufferRef = useRef<Map<string, Promise<string>>>(new Map());
   const prefetchAbortRefs = useRef<Set<AbortController>>(new Set());
   const lastVoiceGenderRef = useRef(voiceGender);
+
+  // Keep ref in sync so in-progress chunks pick up rate changes immediately
+  const updateTTSRate = useCallback((rate: number) => {
+    ttsRateRef.current = rate;
+    setTTSRate(rate);
+    // Apply to currently playing Gemini audio immediately
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.playbackRate = rate;
+    }
+  }, []);
 
   // Clear prefetch cache when voice gender changes to avoid wrong-voice audio
   useEffect(() => {
@@ -100,7 +112,7 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
       if (lang) utterance.lang = lang;
       if (voice) utterance.voice = voice;
       utterance.pitch = config.pitch;
-      utterance.rate = config.rate;
+      utterance.rate = config.rate * ttsRateRef.current;
 
       utterance.onend = () => {
         if (gen !== generationRef.current) {
@@ -223,6 +235,7 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
         audioBase64 = ''; // Release the large base64 string from memory
 
         const audio = new Audio(audioBlobUrl);
+        audio.playbackRate = ttsRateRef.current;
         audioRef.current = audio;
 
         audio.onended = () => {
@@ -253,17 +266,12 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
       } catch (err) {
         if (gen !== generationRef.current) return;
 
-        // On error, skip the failed chunk and continue with Gemini voice
-        // (never fall back to browser TTS — it changes the voice mid-narration)
-        console.warn('[Gemini TTS] Error on chunk', index, '— skipping:', err);
+        // On Gemini error, fall back to browser TTS for the remaining text
+        // so narration continues instead of skipping silently
+        const remainingText = chunks.slice(index).join(' ');
+        console.warn('[Gemini TTS] Error on chunk', index, '— falling back to browser TTS:', err);
         setIsLoadingAudio(false);
-        if (index + 1 < chunks.length) {
-          playChunk(index + 1);
-        } else {
-          // Last chunk failed — end narration cleanly
-          setIsSpeaking(false);
-          onEnd?.();
-        }
+        speakBrowser(remainingText, onEnd, _lang);
       }
     };
 
@@ -273,6 +281,8 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
   // ── Prefetch audio for upcoming text (cross-slide look-ahead) ──
   const prefetchAudio = useCallback((text: string) => {
     if (ttsEngine !== 'gemini' || !googleApiKey) return;
+    // Skip if there are already pending prefetches to avoid rate-limiting
+    if (prefetchAbortRefs.current.size > 0) return;
     const voiceName = GEMINI_VOICE_GENDER[voiceGender] || GEMINI_VOICE_GENDER.female;
     const cleaned = cleanTextForSpeech(text);
     const chunks = chunkTextForGemini(cleaned);
@@ -341,5 +351,5 @@ export function useTTS(voiceGender: VoiceGender, ttsEngine: TTSEngine = 'browser
     }
   }, [ttsEngine, googleApiKey, speakGemini, speakBrowser]);
 
-  return { isSpeaking, isLoadingAudio, voicesReady, speak, stopSpeaking, prefetchAudio };
+  return { isSpeaking, isLoadingAudio, voicesReady, speak, stopSpeaking, prefetchAudio, ttsRate, setTTSRate: updateTTSRate };
 }

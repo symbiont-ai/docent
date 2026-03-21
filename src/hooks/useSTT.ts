@@ -23,6 +23,8 @@ interface UseSTTOptions {
   onFinalTranscript?: (text: string) => void;
   /** Silence duration in ms before auto-stopping (default: 1500) */
   silenceTimeout?: number;
+  /** Language hint for speech recognition (e.g. 'tr', 'en-US'). Defaults to navigator.language */
+  language?: string;
 }
 
 interface UseSTTReturn {
@@ -51,6 +53,7 @@ export function useSTT({
   apiKey,
   onFinalTranscript,
   silenceTimeout = SILENCE_TIMEOUT_MS,
+  language,
 }: UseSTTOptions): UseSTTReturn {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -122,7 +125,7 @@ export function useSTT({
     const recognition = new SpeechRecognitionClass();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = navigator.language || 'en-US';
+    recognition.lang = language || navigator.language || 'en-US';
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = (event: any) => {
@@ -209,7 +212,7 @@ export function useSTT({
       setError('Failed to start speech recognition.');
       console.error('[STT] Browser start error:', err);
     }
-  }, [browserSTTSupported, clearSilenceTimer, silenceTimeout, interimTranscript]);
+  }, [browserSTTSupported, clearSilenceTimer, silenceTimeout, interimTranscript, language]);
 
   // ── Whisper engine (MediaRecorder + API) ─────────────
 
@@ -265,6 +268,7 @@ export function useSTT({
         try {
           const formData = new FormData();
           formData.append('file', blob, 'audio.webm');
+          // Don't send language hint — Whisper auto-detects language natively
 
           const res = await fetch('/api/stt', {
             method: 'POST',
@@ -348,7 +352,7 @@ export function useSTT({
       cleanupMediaResources();
       console.error('[STT] Whisper start error:', err);
     }
-  }, [apiKey, cleanupMediaResources, silenceTimeout]);
+  }, [apiKey, cleanupMediaResources, silenceTimeout, language]);
 
   // ── Public API ───────────────────────────────────────
 

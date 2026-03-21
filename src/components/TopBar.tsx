@@ -16,6 +16,8 @@ interface TopBarProps {
   setAutoVoice: (v: boolean | ((prev: boolean) => boolean)) => void;
   isSpeaking: boolean;
   stopSpeaking: () => void;
+  ttsRate: number;
+  setTTSRate: (rate: number) => void;
   showSidebar: boolean;
   setShowSidebar: (v: boolean | ((prev: boolean) => boolean)) => void;
   setShowSettings: (v: boolean) => void;
@@ -32,6 +34,8 @@ export default function TopBar({
   setAutoVoice,
   isSpeaking,
   stopSpeaking,
+  ttsRate,
+  setTTSRate,
   showSidebar,
   setShowSidebar,
   setShowSettings,
@@ -137,6 +141,29 @@ export default function TopBar({
         >
           {isSpeaking ? '\u23F9 Stop' : autoVoice ? '\uD83D\uDD0A Auto' : '\uD83D\uDD07 Manual'}
         </button>
+
+        {/* Speed control — visible while speaking */}
+        {isSpeaking && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            {[0.75, 1, 1.25, 1.5, 2].map(r => (
+              <button
+                key={r}
+                onClick={() => setTTSRate(r)}
+                style={{
+                  padding: '4px 6px', borderRadius: '4px', fontSize: '11px',
+                  border: `1px solid ${ttsRate === r ? COLORS.accent : COLORS.border}`,
+                  backgroundColor: ttsRate === r ? COLORS.accentBg : 'transparent',
+                  color: ttsRate === r ? COLORS.accent : COLORS.textMuted,
+                  cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
+                  fontWeight: ttsRate === r ? 600 : 400,
+                  minWidth: '36px', textAlign: 'center',
+                }}
+              >
+                {r}x
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Settings */}
         <button

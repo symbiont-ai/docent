@@ -340,10 +340,16 @@ export function useChat() {
   const sessions = useSessions();
 
   // ── Speech-to-Text ──────────────────────────────────────
+  // Derive session language from last Sage message for STT language hint
+  const sttLanguage = [...messages].reverse().find(m => m.sender === 'sage' && m.language)?.language
+    || presentation.presentationRef.current.language
+    || undefined;
+
   const handleSendRef = useRef<((text?: string) => void) | undefined>(undefined);
   const stt = useSTT({
     engine: sttEngine,
     apiKey,
+    language: sttLanguage,
     onFinalTranscript: useCallback((text: string) => {
       // Stop TTS if speaking (prevent feedback)
       tts.stopSpeaking();
@@ -3283,6 +3289,8 @@ Rules:
     isLoadingAudio: tts.isLoadingAudio,
     speak: tts.speak,
     stopSpeaking: tts.stopSpeaking,
+    ttsRate: tts.ttsRate,
+    setTTSRate: tts.setTTSRate,
 
     // ── Sidebar / Sessions (flattened from useSessions) ──
     savedSessions: sessions.savedSessions,

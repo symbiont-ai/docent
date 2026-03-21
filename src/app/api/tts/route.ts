@@ -61,18 +61,34 @@ export async function POST(request: NextRequest) {
       },
     };
 
-    const response = await fetch(`${GEMINI_TTS_URL}?key=${googleKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    // Retry up to 3 times on transient 500/503/429 errors
+    let response: Response | null = null;
+    let lastErr = '';
+    for (let attempt = 0; attempt < 3; attempt++) {
+      response = await fetch(`${GEMINI_TTS_URL}?key=${googleKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
 
-    if (!response.ok) {
-      const err = await response.text();
-      console.error('[TTS] Gemini error:', response.status, err.substring(0, 300));
+      if (response.ok) break;
+
+      lastErr = await response.text();
+      // Only retry on transient server errors, NOT on 429 quota (wastes more quota)
+      if (response.status >= 500 && attempt < 2) {
+        console.warn(`[TTS] Gemini ${response.status} on attempt ${attempt + 1}, retrying...`);
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        continue;
+      }
+      break;
+    }
+
+    if (!response || !response.ok) {
+      const status = response?.status || 500;
+      console.error('[TTS] Gemini error after retries:', status, lastErr.substring(0, 300));
       return NextResponse.json(
-        { error: `Gemini TTS failed (${response.status}): ${err.substring(0, 200)}` },
-        { status: response.status },
+        { error: `Gemini TTS failed (${status}): ${lastErr.substring(0, 200)}` },
+        { status },
       );
     }
 

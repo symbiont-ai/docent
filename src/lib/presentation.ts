@@ -70,13 +70,14 @@ export const chunkText = (text: string): string[] => {
   return chunks.length > 0 ? chunks : [text];
 };
 
-// Chunk text for Gemini TTS — larger chunks (~1500 chars) since Gemini handles longer inputs
+// Chunk text for Gemini TTS — very large chunks (~4000 chars) to minimize voice drift
+// between API calls (each call can produce slightly different voice characteristics)
 export const chunkTextForGemini = (text: string): string[] => {
   const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
   const chunks: string[] = [];
   let current = '';
   for (const s of sentences) {
-    if ((current + s).length > 1500) {
+    if ((current + s).length > 4000) {
       if (current) chunks.push(current.trim());
       current = s;
     } else {

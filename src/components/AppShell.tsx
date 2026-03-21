@@ -34,7 +34,7 @@ export default function AppShell() {
     loadSession, deleteSession, newSession, clearAllSessions,
     deleteMemoryNote, clearAllMemory, autoVoice, setAutoVoice,
     ttsEngine, setTTSEngine, googleApiKey, setGoogleApiKey, browserVoiceName, setBrowserVoiceName,
-    isSpeaking, isLoadingAudio, speak, stopSpeaking, uploadedFiles, removeFile,
+    isSpeaking, isLoadingAudio, speak, stopSpeaking, ttsRate, setTTSRate, uploadedFiles, removeFile,
     fileInputRef, handleFileUpload, pdfDoc, pdfPage, setPdfPage,
     pdfTotalPages, pdfZoom, setPdfZoom, pdfCanvasRef, pdfContainerRef,
     removePdf, renderPdfPage, cropPdfFigure, pdfThumbnails, pdfStructuredText, pdfPageHeights,
@@ -517,6 +517,8 @@ Return your answer as JSON ONLY, no other text:
           setAutoVoice={setAutoVoice}
           isSpeaking={isSpeaking}
           stopSpeaking={stopSpeaking}
+          ttsRate={ttsRate}
+          setTTSRate={setTTSRate}
           showSidebar={showSidebar}
           setShowSidebar={setShowSidebar}
           setShowSettings={setShowSettings}
@@ -932,7 +934,13 @@ Return your answer as JSON ONLY, no other text:
         setGoogleApiKey={setGoogleApiKey}
         browserVoiceName={browserVoiceName}
         setBrowserVoiceName={setBrowserVoiceName}
-        sessionLanguage={presentationState.language}
+        sessionLanguage={
+          // Use language from last Sage message (chat language detection),
+          // fall back to presentation language, then default 'en'
+          [...messages].reverse().find(m => m.sender === 'sage' && m.language)?.language
+          || presentationState.language
+          || 'en'
+        }
         apiKey={apiKey}
         setApiKey={setApiKey}
         selectedModel={selectedModel}
