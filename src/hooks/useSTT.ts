@@ -28,6 +28,7 @@ interface UseSTTReturn {
   startListening: () => void;
   stopListening: () => void;
   resetTranscript: () => void;
+  clearError: () => void;
   /** Whether browser Web Speech API is supported */
   browserSTTSupported: boolean;
 }
