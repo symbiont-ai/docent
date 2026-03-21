@@ -340,7 +340,7 @@ export function useChat() {
   const sessions = useSessions();
 
   // ── Speech-to-Text ──────────────────────────────────────
-  const handleSendRef = useRef<(text?: string) => void>();
+  const handleSendRef = useRef<((text?: string) => void) | undefined>(undefined);
   const stt = useSTT({
     engine: sttEngine,
     apiKey,
