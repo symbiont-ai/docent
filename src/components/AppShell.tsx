@@ -37,7 +37,8 @@ export default function AppShell() {
     isSpeaking, isLoadingAudio, speak, stopSpeaking, uploadedFiles, removeFile,
     fileInputRef, handleFileUpload, pdfDoc, pdfPage, setPdfPage,
     pdfTotalPages, pdfZoom, setPdfZoom, pdfCanvasRef, pdfContainerRef,
-    removePdf, renderPdfPage, cropPdfFigure, pdfThumbnails, presentationState, setPresentationState, persistSession,
+    removePdf, renderPdfPage, cropPdfFigure, pdfThumbnails, pdfStructuredText, pdfPageHeights,
+    presentationState, setPresentationState, persistSession,
     isStreamingSlides,
     narrateSlide, stopNarration, exportPresentationPPTX, exportPresentationHTML,
     exportHtml, setExportHtml, cancelGeneration, messagesEndRef,
@@ -762,6 +763,8 @@ Return your answer as JSON ONLY, no other text:
               fileInputRef={fileInputRef}
               onRemovePdf={removePdf}
               onMount={renderPdfPage}
+              pdfStructuredText={pdfStructuredText}
+              pdfPageHeights={pdfPageHeights}
             />
           )}
 

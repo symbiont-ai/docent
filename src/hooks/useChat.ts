@@ -3318,6 +3318,8 @@ Rules:
     renderPdfPage: pdf.renderCurrentPage,
     cropPdfFigure: pdf.cropPdfFigure,
     pdfThumbnails: pdf.pdfThumbnails,
+    pdfStructuredText: pdf.pdfStructuredText,
+    pdfPageHeights: pdf.pdfPageHeights,
 
     // ── Presentation (flattened from usePresentation) ──
     presentationState: presentation.presentationState,

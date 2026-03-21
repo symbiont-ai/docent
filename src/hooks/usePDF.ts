@@ -14,6 +14,15 @@ type PDFDocumentProxy = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type PDFPageProxy = any;
 
+/** Structured text item with position info from pdf.js getTextContent() */
+export interface PDFTextItem {
+  str: string;
+  /** [scaleX, skewY, skewX, scaleY, translateX, translateY] */
+  transform: number[];
+  width: number;
+  height: number;
+}
+
 export interface UsePDFOptions {
   setLoadingMsg?: (msg: string) => void;
 }
@@ -27,6 +36,8 @@ export function usePDF(options?: UsePDFOptions) {
   const [pdfZoom, setPdfZoom] = useState(1.0);
   const [pdfThumbnails, setPdfThumbnails] = useState<string[]>([]);
   const [pdfTextPages, setPdfTextPages] = useState<string[]>([]);
+  const [pdfStructuredText, setPdfStructuredText] = useState<PDFTextItem[][]>([]);
+  const [pdfPageHeights, setPdfPageHeights] = useState<number[]>([]);
   const [figureIndex, setFigureIndex] = useState<Array<{ label: string; page: number; type: string }>>([]);
 
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -104,9 +115,11 @@ export function usePDF(options?: UsePDFOptions) {
         setPdfThumbnails(thumbnails);
       }
 
-      // Extract text content from all pages (for summarization/Q&A)
+      // Extract text content from all pages (for summarization/Q&A + search)
       setLoadingMsg?.('Extracting text...');
       const textPages: string[] = [];
+      const structuredText: PDFTextItem[][] = [];
+      const pageHeights: number[] = [];
       for (let i = 1; i <= totalPages; i++) {
         if (i % 5 === 0 || i === 1) {
           setLoadingMsg?.(`Extracting text ${i}/${totalPages}...`);
@@ -114,27 +127,48 @@ export function usePDF(options?: UsePDFOptions) {
         try {
           const page = await doc.getPage(i);
           const textContent = await page.getTextContent();
+          // Get page height in PDF points (for Y-flip when rendering highlights)
+          const baseViewport = page.getViewport({ scale: 1 });
+          pageHeights.push(baseViewport.height);
+
           let pageText = '';
           let lastY: number | null = null;
+          const pageItems: PDFTextItem[] = [];
           for (const item of textContent.items) {
             if ('str' in item) {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const y = (item as any).transform?.[5];
+              const typedItem = item as any;
+              const y = typedItem.transform?.[5];
               // New line when Y position changes significantly
               if (lastY !== null && y !== undefined && Math.abs(y - lastY) > 2) {
                 pageText += '\n';
               }
               pageText += item.str;
               if (y !== undefined) lastY = y;
+
+              // Store structured item with position for search highlighting
+              if (typedItem.transform) {
+                pageItems.push({
+                  str: item.str,
+                  transform: typedItem.transform,
+                  width: typedItem.width || 0,
+                  height: typedItem.height || 0,
+                });
+              }
             }
           }
           textPages.push(pageText.trim());
+          structuredText.push(pageItems);
         } catch (e) {
           console.warn(`Text extraction failed for page ${i}:`, e);
           textPages.push('');
+          structuredText.push([]);
+          pageHeights.push(792); // Default letter-size height
         }
       }
       setPdfTextPages(textPages);
+      setPdfStructuredText(structuredText);
+      setPdfPageHeights(pageHeights);
 
       // Build figure/table/equation index from extracted text.
       // Prefer CAPTION occurrences over reference occurrences.
@@ -180,6 +214,8 @@ export function usePDF(options?: UsePDFOptions) {
     setPdfZoom(1.0);
     setPdfThumbnails([]);
     setPdfTextPages([]);
+    setPdfStructuredText([]);
+    setPdfPageHeights([]);
     figureCacheRef.current = {};
   }, []);
 
@@ -269,6 +305,8 @@ export function usePDF(options?: UsePDFOptions) {
     pdfZoom,
     pdfThumbnails,
     pdfTextPages,
+    pdfStructuredText,
+    pdfPageHeights,
     figureIndex,
 
     // Setters
@@ -278,6 +316,8 @@ export function usePDF(options?: UsePDFOptions) {
     setPdfZoom,
     setPdfThumbnails,
     setPdfTextPages,
+    setPdfStructuredText,
+    setPdfPageHeights,
     setFigureIndex,
 
     // Refs

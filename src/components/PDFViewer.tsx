@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { COLORS } from '@/src/lib/colors';
+import { usePDFSearch } from '@/src/hooks/usePDFSearch';
+import type { PDFTextItem } from '@/src/hooks/usePDF';
 import type { UploadedFile } from '@/src/types';
 
 interface PDFViewerProps {
@@ -19,6 +21,10 @@ interface PDFViewerProps {
   onRemovePdf: () => void;
   /** Called on mount to trigger PDF canvas render (fixes blank canvas on tab switch) */
   onMount?: () => void;
+  /** Structured text items per page for search highlighting */
+  pdfStructuredText?: PDFTextItem[][];
+  /** Page heights in PDF points for coordinate Y-flip */
+  pdfPageHeights?: number[];
 }
 
 export default function PDFViewer({
@@ -34,7 +40,46 @@ export default function PDFViewer({
   fileInputRef,
   onRemovePdf,
   onMount,
+  pdfStructuredText = [],
+  pdfPageHeights = [],
 }: PDFViewerProps) {
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // PDF search hook
+  const search = usePDFSearch({
+    structuredText: pdfStructuredText,
+    pageHeights: pdfPageHeights,
+    zoom: pdfZoom,
+    currentPage: pdfPage,
+    setPage: setPdfPage,
+  });
+
+  // Focus search input when opened
+  useEffect(() => {
+    if (search.isSearchOpen) {
+      // Small delay to ensure the input is rendered
+      const timer = setTimeout(() => searchInputRef.current?.focus(), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [search.isSearchOpen]);
+
+  // Keyboard handler for Ctrl+F and ESC
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      search.openSearch();
+    }
+    if (e.key === 'Escape' && search.isSearchOpen) {
+      e.preventDefault();
+      search.closeSearch();
+    }
+  }, [search]);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
   // Re-render the PDF canvas when this component mounts (tab switch)
   useEffect(() => {
     if (pdfDoc && onMount) {
@@ -191,6 +236,21 @@ export default function PDFViewer({
           {'\uD83D\uDD0D+'}
         </button>
 
+        {/* Search button */}
+        <button
+          onClick={() => search.isSearchOpen ? search.closeSearch() : search.openSearch()}
+          title="Search in PDF (Ctrl+F)"
+          style={{
+            padding: '4px 10px', fontSize: '14px',
+            backgroundColor: search.isSearchOpen ? COLORS.accentBg : 'transparent',
+            border: `1px solid ${COLORS.border}`, borderRadius: '4px',
+            color: search.isSearchOpen ? COLORS.accent : COLORS.textMuted,
+            cursor: 'pointer',
+          }}
+        >
+          {'\uD83D\uDD0D'}
+        </button>
+
         {/* Divider */}
         <div style={{ width: '1px', height: '20px', backgroundColor: COLORS.border }} />
 
@@ -213,6 +273,92 @@ export default function PDFViewer({
         </button>
       </div>
 
+      {/* Search bar */}
+      {search.isSearchOpen && (
+        <div style={{
+          padding: '6px 12px',
+          borderBottom: `1px solid ${COLORS.border}`,
+          backgroundColor: COLORS.surface,
+          display: 'flex', gap: '8px', alignItems: 'center',
+        }}>
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={search.searchQuery}
+            onChange={(e) => search.setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                  search.goToPrevMatch();
+                } else {
+                  search.goToNextMatch();
+                }
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                search.closeSearch();
+              }
+            }}
+            placeholder="Search in PDF..."
+            style={{
+              flex: 1, maxWidth: '300px', padding: '5px 10px',
+              fontSize: '13px', fontFamily: 'system-ui, sans-serif',
+              backgroundColor: COLORS.bg, color: COLORS.text,
+              border: `1px solid ${COLORS.border}`, borderRadius: '4px',
+              outline: 'none',
+            }}
+          />
+          <span style={{
+            fontSize: '12px', color: COLORS.textDim,
+            fontFamily: 'system-ui, sans-serif', minWidth: '60px',
+          }}>
+            {search.searchQuery.trim()
+              ? search.totalMatches > 0
+                ? `${search.currentMatchIndex + 1} of ${search.totalMatches}`
+                : 'No matches'
+              : ''}
+          </span>
+          <button
+            onClick={search.goToPrevMatch}
+            disabled={search.totalMatches === 0}
+            title="Previous match (Shift+Enter)"
+            style={{
+              padding: '3px 8px', fontSize: '12px', backgroundColor: 'transparent',
+              border: `1px solid ${COLORS.border}`, borderRadius: '4px',
+              color: search.totalMatches === 0 ? COLORS.textDim : COLORS.textMuted,
+              cursor: search.totalMatches === 0 ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {'\u25B2'}
+          </button>
+          <button
+            onClick={search.goToNextMatch}
+            disabled={search.totalMatches === 0}
+            title="Next match (Enter)"
+            style={{
+              padding: '3px 8px', fontSize: '12px', backgroundColor: 'transparent',
+              border: `1px solid ${COLORS.border}`, borderRadius: '4px',
+              color: search.totalMatches === 0 ? COLORS.textDim : COLORS.textMuted,
+              cursor: search.totalMatches === 0 ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {'\u25BC'}
+          </button>
+          <button
+            onClick={search.closeSearch}
+            title="Close search (Esc)"
+            style={{
+              padding: '3px 8px', fontSize: '13px', backgroundColor: 'transparent',
+              border: `1px solid ${COLORS.border}`, borderRadius: '4px',
+              color: COLORS.textMuted, cursor: 'pointer',
+            }}
+          >
+            {'\u2715'}
+          </button>
+        </div>
+      )}
+
       {/* Canvas area */}
       <div
         ref={pdfContainerRef}
@@ -228,10 +374,39 @@ export default function PDFViewer({
           backgroundColor: COLORS.surfaceHover,
         }}
       >
-        <canvas
-          ref={pdfCanvasRef}
-          style={{ flexShrink: 0, margin: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
-        />
+        {/* Relative wrapper for canvas + highlight overlay */}
+        <div style={{ position: 'relative', flexShrink: 0, margin: 'auto' }}>
+          <canvas
+            ref={pdfCanvasRef}
+            style={{ display: 'block', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
+          />
+          {/* Search highlight overlay */}
+          {search.isSearchOpen && search.currentPageHighlights.length > 0 && (
+            <div style={{
+              position: 'absolute', top: 0, left: 0,
+              width: '100%', height: '100%',
+              pointerEvents: 'none',
+            }}>
+              {search.currentPageHighlights.map((rect, i) => (
+                <div
+                  key={i}
+                  style={{
+                    position: 'absolute',
+                    left: `${rect.x}px`,
+                    top: `${rect.y}px`,
+                    width: `${rect.width}px`,
+                    height: `${rect.height}px`,
+                    backgroundColor: rect.isActive
+                      ? 'rgba(255, 165, 0, 0.6)'   // Active: bright orange
+                      : 'rgba(255, 215, 0, 0.3)',   // Others: light gold
+                    borderRadius: '1px',
+                    transition: 'background-color 0.15s ease',
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
