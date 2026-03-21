@@ -9,6 +9,11 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { STTEngine } from '@/src/types';
 
+// ── Web Speech API type shims (not in all TS DOM libs) ───
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type SpeechRecognitionInstance = any;
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 // ── Types ────────────────────────────────────────────────
 
 interface UseSTTOptions {
@@ -53,7 +58,7 @@ export function useSTT({
   const [error, setError] = useState<string | null>(null);
 
   // Refs for cleanup
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -105,8 +110,9 @@ export function useSTT({
       return;
     }
 
-    const SpeechRecognitionClass = (window as unknown as { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition
-      || (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const SpeechRecognitionClass = w.SpeechRecognition || w.webkitSpeechRecognition;
 
     if (!SpeechRecognitionClass) {
       setError('Speech recognition not available.');
@@ -118,7 +124,8 @@ export function useSTT({
     recognition.interimResults = true;
     recognition.lang = navigator.language || 'en-US';
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onresult = (event: any) => {
       clearSilenceTimer();
 
       let interim = '';
@@ -162,7 +169,8 @@ export function useSTT({
       }
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onerror = (event: any) => {
       // Suppress user-initiated abort and no-speech (common non-errors)
       if (event.error === 'aborted' || event.error === 'no-speech') return;
 
