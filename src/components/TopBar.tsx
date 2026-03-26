@@ -11,10 +11,13 @@ interface TopBarProps {
   pdfDoc: any;
   pdfTotalPages: number;
   slidesCount: number;
+  hasPoster: boolean;
   autoVoice: boolean;
   setAutoVoice: (v: boolean | ((prev: boolean) => boolean)) => void;
   isSpeaking: boolean;
   stopSpeaking: () => void;
+  ttsRate: number;
+  setTTSRate: (rate: number) => void;
   showSidebar: boolean;
   setShowSidebar: (v: boolean | ((prev: boolean) => boolean)) => void;
   setShowSettings: (v: boolean) => void;
@@ -26,24 +29,28 @@ export default function TopBar({
   pdfDoc,
   pdfTotalPages,
   slidesCount,
+  hasPoster,
   autoVoice,
   setAutoVoice,
   isSpeaking,
   stopSpeaking,
+  ttsRate,
+  setTTSRate,
   showSidebar,
   setShowSidebar,
   setShowSettings,
 }: TopBarProps) {
-  const tabs: ActiveTab[] = ['chat', 'pdf', 'slides'];
+  const tabs: ActiveTab[] = ['chat', 'pdf', 'slides', 'poster'];
 
   const getTabLabel = (tab: ActiveTab): string => {
     if (tab === 'chat') return 'Chat';
     if (tab === 'pdf') return `PDF${pdfDoc ? ` (${pdfTotalPages}p)` : ''}`;
+    if (tab === 'poster') return `Poster${hasPoster ? ' ✓' : ''}`;
     return `Slides${slidesCount > 0 ? ` (${slidesCount})` : ''}`;
   };
 
   return (
-    <div style={{
+    <div className="topbar-root" style={{
       padding: '10px 20px',
       borderBottom: `1px solid ${COLORS.border}`,
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -64,27 +71,33 @@ export default function TopBar({
         >
           {'\u2630'}
         </button>
-        <span style={{
+        <span className="topbar-brand" style={{
           fontSize: '22px', fontWeight: 700, color: COLORS.accent,
           letterSpacing: '0.5px',
           fontFamily: "'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif",
         }}>
           Docent
         </span>
-        <span style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic' }}>
+        <span className="topbar-tagline" style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic' }}>
           Your AI Presenter
         </span>
-        <span style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic', marginLeft: '6px' }}>
+        <span className="topbar-tagline" style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic', marginLeft: '6px' }}>
           — Learn something new today
         </span>
+        {process.env.NEXT_PUBLIC_BUILD_DATE && (
+          <span style={{ fontSize: '10px', color: COLORS.textMuted, marginLeft: '8px', opacity: 0.6 }}>
+            v{process.env.NEXT_PUBLIC_BUILD_DATE}
+          </span>
+        )}
       </div>
 
       {/* Right side: tabs, voice, settings */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div className="topbar-right" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         {/* Tab switcher */}
         {tabs.map(tab => (
           <button
             key={tab}
+            className="topbar-tab-btn"
             onClick={() => setActiveTab(tab)}
             style={{
               padding: '5px 14px', borderRadius: '6px',
@@ -111,6 +124,7 @@ export default function TopBar({
               setAutoVoice((v: boolean) => !v);
             }
           }}
+          className="topbar-voice-btn"
           style={{
             padding: '5px 10px', borderRadius: '6px',
             border: `1px solid ${COLORS.border}`,
@@ -129,6 +143,29 @@ export default function TopBar({
         >
           {isSpeaking ? '\u23F9 Stop' : autoVoice ? '\uD83D\uDD0A Auto' : '\uD83D\uDD07 Manual'}
         </button>
+
+        {/* Speed control — visible while speaking */}
+        {isSpeaking && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            {[0.75, 1, 1.25, 1.5, 2].map(r => (
+              <button
+                key={r}
+                onClick={() => setTTSRate(r)}
+                style={{
+                  padding: '4px 6px', borderRadius: '4px', fontSize: '11px',
+                  border: `1px solid ${ttsRate === r ? COLORS.accent : COLORS.border}`,
+                  backgroundColor: ttsRate === r ? COLORS.accentBg : 'transparent',
+                  color: ttsRate === r ? COLORS.accent : COLORS.textMuted,
+                  cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
+                  fontWeight: ttsRate === r ? 600 : 400,
+                  minWidth: '36px', textAlign: 'center',
+                }}
+              >
+                {r}x
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Settings */}
         <button

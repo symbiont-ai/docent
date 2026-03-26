@@ -59,7 +59,7 @@ export default function Sidebar({
   if (!show) return null;
 
   return (
-    <div style={{
+    <div className="print-hide sidebar-panel" style={{
       width: '280px', borderRight: `1px solid ${COLORS.border}`,
       display: 'flex', flexDirection: 'column',
       backgroundColor: COLORS.surface, flexShrink: 0,
@@ -85,7 +85,7 @@ export default function Sidebar({
             flex: 1, padding: '10px',
             backgroundColor: sidebarTab === 'memory' ? COLORS.surfaceHover : 'transparent',
             border: 'none',
-            color: sidebarTab === 'memory' ? '#A78BFA' : COLORS.textDim,
+            color: sidebarTab === 'memory' ? COLORS.purple : COLORS.textDim,
             cursor: 'pointer', fontSize: '12px', fontWeight: 500,
             fontFamily: 'system-ui, sans-serif',
           }}
@@ -207,35 +207,37 @@ export default function Sidebar({
                     backgroundColor: isActive ? COLORS.surfaceHover : 'transparent',
                     border: isActive ? `1px solid ${COLORS.accentBorder}` : '1px solid transparent',
                     opacity: sessionBusy ? 0.6 : 1,
+                    display: 'flex', alignItems: 'flex-start', gap: '6px',
+                    overflow: 'hidden',
                   }}
                 >
-                  <div style={{
-                    fontSize: '13px', fontWeight: 500, color: COLORS.text,
-                    marginBottom: '2px', overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    fontFamily: 'system-ui, sans-serif',
-                  }}>
-                    {session.title}
-                  </div>
-                  <div style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  }}>
-                    <span style={{
-                      fontSize: '11px', color: COLORS.textDim,
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDeleteSession(session.id); }}
+                    style={{
+                      padding: '2px 4px', fontSize: '10px', flexShrink: 0,
+                      backgroundColor: 'transparent', color: COLORS.red,
+                      border: 'none', cursor: 'pointer', opacity: 0.6,
+                      lineHeight: 1,
+                    }}
+                  >
+                    {'\u2715'}
+                  </button>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{
+                      fontSize: '13px', fontWeight: 500, color: COLORS.text,
+                      marginBottom: '2px', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       fontFamily: 'system-ui, sans-serif',
                     }}>
+                      {session.title}
+                    </div>
+                    <div style={{
+                      fontSize: '11px', color: COLORS.textDim,
+                      fontFamily: 'system-ui, sans-serif',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
                       {subtitle} {'\u00B7'} {formatDate(session.updatedAt)}
-                    </span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onDeleteSession(session.id); }}
-                      style={{
-                        padding: '2px 6px', fontSize: '10px',
-                        backgroundColor: 'transparent', color: COLORS.red,
-                        border: 'none', cursor: 'pointer', opacity: 0.6,
-                      }}
-                    >
-                      {'\u2715'}
-                    </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -252,7 +254,7 @@ export default function Sidebar({
             marginBottom: '12px',
           }}>
             <h3 style={{
-              margin: 0, fontSize: '13px', color: '#A78BFA',
+              margin: 0, fontSize: '13px', color: COLORS.purple,
               textTransform: 'uppercase', letterSpacing: '0.5px',
               fontFamily: 'system-ui, sans-serif',
             }}>
