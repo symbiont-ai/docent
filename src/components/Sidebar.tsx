@@ -59,7 +59,7 @@ export default function Sidebar({
   if (!show) return null;
 
   return (
-    <div className="print-hide" style={{
+    <div className="print-hide sidebar-panel" style={{
       width: '280px', borderRight: `1px solid ${COLORS.border}`,
       display: 'flex', flexDirection: 'column',
       backgroundColor: COLORS.surface, flexShrink: 0,

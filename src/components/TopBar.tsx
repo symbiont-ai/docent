@@ -50,7 +50,7 @@ export default function TopBar({
   };
 
   return (
-    <div style={{
+    <div className="topbar-root" style={{
       padding: '10px 20px',
       borderBottom: `1px solid ${COLORS.border}`,
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -71,17 +71,17 @@ export default function TopBar({
         >
           {'\u2630'}
         </button>
-        <span style={{
+        <span className="topbar-brand" style={{
           fontSize: '22px', fontWeight: 700, color: COLORS.accent,
           letterSpacing: '0.5px',
           fontFamily: "'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif",
         }}>
           Docent
         </span>
-        <span style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic' }}>
+        <span className="topbar-tagline" style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic' }}>
           Your AI Presenter
         </span>
-        <span style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic', marginLeft: '6px' }}>
+        <span className="topbar-tagline" style={{ fontSize: '14px', color: COLORS.text, fontStyle: 'italic', marginLeft: '6px' }}>
           — Learn something new today
         </span>
         {process.env.NEXT_PUBLIC_BUILD_DATE && (
@@ -92,11 +92,12 @@ export default function TopBar({
       </div>
 
       {/* Right side: tabs, voice, settings */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div className="topbar-right" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         {/* Tab switcher */}
         {tabs.map(tab => (
           <button
             key={tab}
+            className="topbar-tab-btn"
             onClick={() => setActiveTab(tab)}
             style={{
               padding: '5px 14px', borderRadius: '6px',
@@ -123,6 +124,7 @@ export default function TopBar({
               setAutoVoice((v: boolean) => !v);
             }
           }}
+          className="topbar-voice-btn"
           style={{
             padding: '5px 10px', borderRadius: '6px',
             border: `1px solid ${COLORS.border}`,
