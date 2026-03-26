@@ -113,7 +113,7 @@ export default function TopBar({
         ))}
 
         {/* Divider */}
-        <div style={{ width: '1px', height: '20px', backgroundColor: COLORS.border, margin: '0 4px' }} />
+        <div className="topbar-divider" style={{ width: '1px', height: '20px', backgroundColor: COLORS.border, margin: '0 4px' }} />
 
         {/* Auto-voice toggle */}
         <button
