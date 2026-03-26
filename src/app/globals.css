@@ -152,32 +152,37 @@ input:focus, textarea:focus, select:focus {
   /* TopBar */
   .topbar-root {
     flex-wrap: wrap !important;
-    padding: 8px 10px !important;
+    padding: 6px 8px !important;
     gap: 4px;
-    overflow: hidden !important;
   }
   .topbar-tagline {
     display: none !important;
   }
+  .topbar-version {
+    display: none !important;
+  }
   .topbar-brand {
-    font-size: 18px !important;
+    font-size: 16px !important;
   }
   .topbar-right {
     width: 100%;
     justify-content: flex-start !important;
     flex-wrap: wrap !important;
-    gap: 4px !important;
-    overflow: hidden !important;
+    gap: 3px !important;
   }
   .topbar-tab-btn {
-    padding: 4px 8px !important;
-    font-size: 12px !important;
+    padding: 3px 8px !important;
+    font-size: 11px !important;
   }
   .topbar-voice-btn {
     width: auto !important;
-    min-width: 60px;
+    min-width: unset !important;
+    font-size: 11px !important;
+    padding: 3px 6px !important;
+  }
+  .topbar-settings-btn {
+    padding: 3px 6px !important;
     font-size: 12px !important;
-    padding: 4px 8px !important;
   }
   .topbar-divider {
     display: none !important;
@@ -194,19 +199,6 @@ input:focus, textarea:focus, select:focus {
   }
   .sidebar-backdrop {
     display: block !important;
-  }
-}
-
-/* Extra-small portrait phones */
-@media (max-width: 400px) {
-  .topbar-tab-btn {
-    padding: 3px 6px !important;
-    font-size: 11px !important;
-  }
-  .topbar-voice-btn {
-    min-width: 50px;
-    font-size: 11px !important;
-    padding: 3px 6px !important;
   }
 }
 
