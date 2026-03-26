@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://github.com/symbiont-ai/docent/releases/download/v1.0.0/demo-hires.gif" alt="Docent Demo — From PDF to Narrated Presentation to Assessment" width="800">
   <br>
-  <a href="https://youtube.com/@cafecybernetics">📺 Watch the full demo on YouTube</a>
+  <a href="https://www.youtube.com/watch?v=jfRvhzEwCqY&list=PL-S7LfHfYqcfcV0CEtRyz_5IzC--QH6KG&index=2">📺 Watch the full demo on YouTube</a>
 </p>
 
 **Docent** is an open-source, browser-based platform that connects document understanding, research curation, and educational delivery into a single conversational pipeline. Its AI persona **Sage** engages users in a *symbiotic loop* — an iterative cycle of bidirectional questioning between human and AI — spanning the full arc from research to learning.
@@ -128,6 +128,10 @@ Six React hooks compose the client-side state:
 | `useTTS` | Dual speech synthesis, voice selection, chunked playback, prefetch buffering |
 | `useMemory` | Cross-session notes via `[NOTE:]` tags |
 | `useSessions` | Complete session serialization to/from IndexedDB |
+
+## Acknowledgments
+
+Poster generation feature inspired by [posterskill](https://github.com/ethanweber/posterskill).
 
 ## License
 
